@@ -11,6 +11,7 @@ import {
 } from '@modelcontextprotocol/sdk/types.js';
 import { chromium, BrowserContext } from 'playwright';
 import { ZeptoPlatform } from './platforms/zepto.js';
+import { SwiggyInstamartPlatform } from './platforms/swiggy-instamart.js';
 import { QuickCommercePlatform } from './platforms/base.js';
 
 // Store active platform instances
@@ -31,7 +32,7 @@ const TOOLS: Tool[] = [
         },
         platforms: {
           type: 'array',
-          items: { type: 'string', enum: ['zepto', 'swiggy', 'bigbasket', 'all'] },
+          items: { type: 'string', enum: ['zepto', 'swiggy', 'swiggy-instamart', 'bigbasket', 'all'] },
           description: 'Platforms to search on. Use "all" to search all supported platforms.',
         },
         pincode: {
@@ -50,7 +51,7 @@ const TOOLS: Tool[] = [
       properties: {
         platforms: {
           type: 'array',
-          items: { type: 'string', enum: ['zepto', 'swiggy', 'bigbasket', 'all'] },
+          items: { type: 'string', enum: ['zepto', 'swiggy', 'swiggy-instamart', 'bigbasket', 'all'] },
           description: 'Platforms to check login status',
         },
       },
@@ -65,7 +66,7 @@ const TOOLS: Tool[] = [
       properties: {
         platform: {
           type: 'string',
-          enum: ['zepto', 'swiggy', 'bigbasket'],
+          enum: ['zepto', 'swiggy', 'swiggy-instamart', 'bigbasket'],
           description: 'Platform to submit OTP for',
         },
         otp: {
@@ -84,7 +85,7 @@ const TOOLS: Tool[] = [
       properties: {
         platform: {
           type: 'string',
-          enum: ['zepto', 'swiggy', 'bigbasket'],
+          enum: ['zepto', 'swiggy', 'swiggy-instamart', 'bigbasket'],
           description: 'Platform to add items to',
         },
         items: {
@@ -116,7 +117,7 @@ const TOOLS: Tool[] = [
       properties: {
         platform: {
           type: 'string',
-          enum: ['zepto', 'swiggy', 'bigbasket'],
+          enum: ['zepto', 'swiggy', 'swiggy-instamart', 'bigbasket'],
           description: 'Platform to get cart from',
         },
       },
@@ -154,7 +155,7 @@ const TOOLS: Tool[] = [
       properties: {
         platform: {
           type: 'string',
-          enum: ['zepto', 'swiggy', 'bigbasket'],
+          enum: ['zepto', 'swiggy', 'swiggy-instamart', 'bigbasket'],
           description: 'Platform to clear cart',
         },
         confirm: {
@@ -188,6 +189,10 @@ async function getPlatform(name: string): Promise<QuickCommercePlatform> {
     switch (name) {
       case 'zepto':
         platform = new ZeptoPlatform();
+        break;
+      case 'swiggy':
+      case 'swiggy-instamart':
+        platform = new SwiggyInstamartPlatform();
         break;
       default:
         throw new Error(`Platform ${name} not supported`);

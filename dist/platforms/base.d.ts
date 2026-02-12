@@ -32,6 +32,7 @@ export interface SearchResult {
     platform: string;
     products: Product[];
     totalResults: number;
+    error?: string;
 }
 export interface Address {
     id: string;

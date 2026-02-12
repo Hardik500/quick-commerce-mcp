@@ -12,6 +12,7 @@ import {
 import { chromium, BrowserContext } from 'playwright';
 import { ZeptoPlatform } from './platforms/zepto.js';
 import { SwiggyInstamartPlatform } from './platforms/swiggy-instamart.js';
+import { BlinkitPlatform } from './platforms/blinkit.js';
 import { QuickCommercePlatform } from './platforms/base.js';
 
 // Store active platform instances
@@ -66,7 +67,7 @@ const TOOLS: Tool[] = [
       properties: {
         platform: {
           type: 'string',
-          enum: ['zepto', 'swiggy', 'swiggy-instamart', 'bigbasket'],
+          enum: ['zepto', 'swiggy', 'swiggy-instamart', 'blinkit', 'bigbasket'],
           description: 'Platform to submit OTP for',
         },
         otp: {
@@ -85,7 +86,7 @@ const TOOLS: Tool[] = [
       properties: {
         platform: {
           type: 'string',
-          enum: ['zepto', 'swiggy', 'swiggy-instamart', 'bigbasket'],
+          enum: ['zepto', 'swiggy', 'swiggy-instamart', 'blinkit', 'bigbasket'],
           description: 'Platform to add items to',
         },
         items: {
@@ -117,7 +118,7 @@ const TOOLS: Tool[] = [
       properties: {
         platform: {
           type: 'string',
-          enum: ['zepto', 'swiggy', 'swiggy-instamart', 'bigbasket'],
+          enum: ['zepto', 'swiggy', 'swiggy-instamart', 'blinkit', 'bigbasket'],
           description: 'Platform to get cart from',
         },
       },
@@ -155,7 +156,7 @@ const TOOLS: Tool[] = [
       properties: {
         platform: {
           type: 'string',
-          enum: ['zepto', 'swiggy', 'swiggy-instamart', 'bigbasket'],
+          enum: ['zepto', 'swiggy', 'swiggy-instamart', 'blinkit', 'bigbasket'],
           description: 'Platform to clear cart',
         },
         confirm: {
@@ -192,7 +193,16 @@ async function getPlatform(name: string): Promise<QuickCommercePlatform> {
         break;
       case 'swiggy':
       case 'swiggy-instamart':
+      case 'blinkit':
+        platform = new BlinkitPlatform();
+        break;
         platform = new SwiggyInstamartPlatform();
+      case 'blinkit':
+        platform = new BlinkitPlatform();
+        break;
+        break;
+      case 'blinkit':
+        platform = new BlinkitPlatform();
         break;
       default:
         throw new Error(`Platform ${name} not supported`);

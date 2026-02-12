@@ -6,7 +6,7 @@
   "type": "module",
   "scripts": {
     "build": "tsc",
-    "dev": "tsx watch src/index.ts",
+    "dev": "node --watch dist/index.js",
     "start": "node dist/index.js",
     "test": "jest",
     "lint": "eslint src/",
@@ -32,7 +32,6 @@
   },
   "devDependencies": {
     "@types/node": "^20.10.0",
-    "tsx": "^4.7.0",
     "typescript": "^5.3.0"
   }
 }

@@ -193,13 +193,7 @@ async function getPlatform(name: string): Promise<QuickCommercePlatform> {
         break;
       case 'swiggy':
       case 'swiggy-instamart':
-      case 'blinkit':
-        platform = new BlinkitPlatform();
-        break;
         platform = new SwiggyInstamartPlatform();
-      case 'blinkit':
-        platform = new BlinkitPlatform();
-        break;
         break;
       case 'blinkit':
         platform = new BlinkitPlatform();

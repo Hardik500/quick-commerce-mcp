@@ -1,13 +1,22 @@
 /**
  * Zepto platform implementation
  * URL: https://www.zeptonow.com
+ *
+ * NOTE: Zepto uses CloudFront bot detection. For reliable access:
+ * 1. Use interactive login mode to save an authenticated session
+ * 2. Or use a residential proxy service
+ *
+ * Run: npx tsx src/session-helper.ts login zepto
  */
 import { BrowserContext } from 'playwright';
 import { QuickCommercePlatform, SearchResult, CartSummary, Address } from './base.js';
 export declare class ZeptoPlatform extends QuickCommercePlatform {
     private selectors;
+    private sessionLoaded;
     constructor();
     initialize(context: BrowserContext): Promise<void>;
+    private loadSession;
+    saveSession(): Promise<void>;
     checkLogin(): Promise<{
         loggedIn: boolean;
         otpSent?: boolean;

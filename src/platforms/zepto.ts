@@ -1,8 +1,16 @@
 /**
  * Zepto platform implementation
  * URL: https://www.zeptonow.com
+ * 
+ * NOTE: Zepto uses CloudFront bot detection. For reliable access:
+ * 1. Use interactive login mode to save an authenticated session
+ * 2. Or use a residential proxy service
+ * 
+ * Run: npx tsx src/session-helper.ts login zepto
  */
 import { BrowserContext, Page } from 'playwright';
+import * as fs from 'fs';
+import * as path from 'path';
 import {
   QuickCommercePlatform,
   Product,
@@ -12,23 +20,28 @@ import {
   Address,
 } from './base.js';
 
+const SESSION_DIR = path.join(process.cwd(), 'data', 'sessions');
+
 export class ZeptoPlatform extends QuickCommercePlatform {
   private selectors = {
-    searchInput: '[data-testid="search-input"], input[placeholder*="search"], input[placeholder*="Search"]',
-    searchResults: '[data-testid="product-card"], .product-card, [class*="product"]',
-    productName: '[data-testid="product-name"], .product-name, h3, h4',
-    productPrice: '[data-testid="product-price"], .price, span[class*="price"]',
-    productMRP: '[data-testid="product-mrp"], .mrp, span[class*="mrp"]',
-    addToCartButton: '[data-testid="add-to-cart"], button:has-text("Add"), button[class*="add"]',
-    quantitySelector: '[data-testid="quantity"], .quantity',
-    cartIcon: '[data-testid="cart"], a[href*="cart"], button[class*="cart"]',
-    cartItems: '[data-testid="cart-item"], .cart-item',
-    loginButton: 'button:has-text("Login"), button:has-text("Sign in")',
-    phoneInput: 'input[type="tel"], input[placeholder*="phone"], input[placeholder*="mobile"]',
-    otpInput: 'input[type="number"], input[placeholder*="OTP"], input[placeholder*="code"]',
-    addressSelector: '[data-testid="address"], .address',
-    // Add more selectors as discovered
+    searchInput: '[data-testid="search-input"], input[placeholder*="search"], input[placeholder*="Search"], input[role="searchbox"], [class*="SearchBar"] input',
+    searchResults: '[data-testid="product-card"], .product-card, [class*="ProductCard"], [class*="product"], [data-sku]',
+    productName: '[data-testid="product-name"], .product-name, h3, h4, [class*="productName"], [class*="title"]',
+    productPrice: '[data-testid="product-price"], .price, span[class*="price"], [class*="Price"], [class*="offer"]',
+    productMRP: '[data-testid="product-mrp"], .mrp, span[class*="mrp"], [class*="strike"], [class*="Mrp"]',
+    addToCartButton: '[data-testid="add-to-cart"], button:has-text("Add"), button[class*="add"], [class*="AddToCart"]',
+    quantitySelector: '[data-testid="quantity"], .quantity, [class*="Quantity"]',
+    cartIcon: '[data-testid="cart"], a[href*="cart"], button[class*="cart"], [class*="CartIcon"]',
+    cartItems: '[data-testid="cart-item"], .cart-item, [class*="CartItem"]',
+    loginButton: 'button:has-text("Login"), button:has-text("Sign in"), [class*="loginBtn"], a[href*="login"]',
+    phoneInput: 'input[type="tel"], input[placeholder*="phone"], input[placeholder*="mobile"], input[placeholder*="number"]',
+    otpInput: 'input[type="number"], input[placeholder*="OTP"], input[placeholder*="code"], input[maxlength="6"]',
+    addressSelector: '[data-testid="address"], .address, [class*="AddressCard"]',
+    // CloudFront detection
+    blockedPage: 'h1:has-text("403"), h2:has-text("Request blocked"), h1:has-text("ERROR")',
   };
+
+  private sessionLoaded: boolean = false;
 
   constructor() {
     super('zepto', 'https://www.zeptonow.com');
@@ -36,16 +49,74 @@ export class ZeptoPlatform extends QuickCommercePlatform {
 
   async initialize(context: BrowserContext): Promise<void> {
     this.context = context;
+    
+    // Try to load saved session
+    await this.loadSession();
+    
     this.page = await context.newPage();
     
     // Set viewport to mobile for better compatibility
     await this.page.setViewportSize({ width: 390, height: 844 });
     
+    // Add stealth scripts
+    await this.page.addInitScript(() => {
+      Object.defineProperty(navigator, 'webdriver', { get: () => undefined });
+    });
+
     // Navigate to base URL
-    await this.page.goto(this.baseUrl, { waitUntil: 'domcontentloaded' });
+    const response = await this.page.goto(this.baseUrl, { 
+      waitUntil: 'domcontentloaded',
+      timeout: 30000 
+    });
+    
+    // Check if blocked by CloudFront
+    if (response?.status() === 403) {
+      console.error('❌ Zepto returned 403 - CloudFront blocking automated browsers');
+      console.error('💡 Tip: Use interactive login mode to save an authenticated session:');
+      console.error('   npx tsx src/session-helper.ts login zepto');
+    }
     
     // Wait for initial load
     await this.page.waitForTimeout(2000);
+    
+    // Check for blocked page
+    const blockedEl = await this.page.$(this.selectors.blockedPage);
+    if (blockedEl) {
+      console.error('❌ Zepto blocked the request (bot detection)');
+    }
+  }
+
+  private async loadSession(): Promise<void> {
+    const sessionPath = path.join(SESSION_DIR, 'zepto-session.json');
+    
+    if (fs.existsSync(sessionPath)) {
+      try {
+        const sessionData = JSON.parse(fs.readFileSync(sessionPath, 'utf-8'));
+        await this.context!.addCookies(sessionData.cookies);
+        this.sessionLoaded = true;
+        console.log('✅ Loaded saved Zepto session');
+      } catch (error) {
+        console.log('⚠️ Failed to load saved session:', error);
+      }
+    }
+  }
+
+  async saveSession(): Promise<void> {
+    if (!this.context) return;
+    
+    if (!fs.existsSync(SESSION_DIR)) {
+      fs.mkdirSync(SESSION_DIR, { recursive: true });
+    }
+    
+    const sessionPath = path.join(SESSION_DIR, 'zepto-session.json');
+    const cookies = await this.context.cookies();
+    
+    fs.writeFileSync(sessionPath, JSON.stringify({
+      cookies,
+      savedAt: new Date().toISOString(),
+    }, null, 2));
+    
+    console.log('✅ Session saved to', sessionPath);
   }
 
   async checkLogin(): Promise<{ loggedIn: boolean; otpSent?: boolean; phone?: string }> {

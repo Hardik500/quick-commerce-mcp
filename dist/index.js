@@ -5,13 +5,17 @@
 import { Server } from '@modelcontextprotocol/sdk/server/index.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import { CallToolRequestSchema, ListToolsRequestSchema, } from '@modelcontextprotocol/sdk/types.js';
-import { chromium } from 'playwright';
 import { ZeptoPlatform } from './platforms/zepto.js';
 import { SwiggyInstamartPlatform } from './platforms/swiggy-instamart.js';
 import { BlinkitPlatform } from './platforms/blinkit.js';
-// Store active platform instances
+import { StealthBrowser } from './engine/stealth-browser.js';
+import { sessionPath } from './session-helper.js';
+// All platforms supported by the "all" shorthand in tool inputs.
+const ALL_PLATFORMS = ['zepto', 'swiggy-instamart', 'blinkit'];
+// Store active platform instances, each with its own browser context so
+// sessions (and any bot-detection fallout) stay isolated per platform.
 const platforms = new Map();
-let browserContext = null;
+const browsers = new Map();
 // Tool definitions
 const TOOLS = [
     {
@@ -161,19 +165,9 @@ const TOOLS = [
         },
     },
 ];
-// Initialize browser
-async function initializeBrowser() {
-    const browser = await chromium.launch({ headless: true });
-    browserContext = await browser.newContext({
-        userAgent: 'Mozilla/5.0 (iPhone; CPU iPhone OS 16_6 like Mac OS X) AppleWebKit/605.1.15',
-        viewport: { width: 390, height: 844 },
-    });
-}
-// Get or create platform instance
+// Get or create platform instance, each backed by its own stealth browser
+// context restored from that platform's saved session (if any).
 async function getPlatform(name) {
-    if (!browserContext) {
-        await initializeBrowser();
-    }
     if (!platforms.has(name)) {
         let platform;
         switch (name) {
@@ -190,7 +184,13 @@ async function getPlatform(name) {
             default:
                 throw new Error(`Platform ${name} not supported`);
         }
-        await platform.initialize(browserContext);
+        const stealth = new StealthBrowser();
+        const context = await stealth.launch({
+            headless: true,
+            storageStatePath: sessionPath(name),
+        });
+        browsers.set(name, stealth);
+        await platform.initialize(context);
         platforms.set(name, platform);
     }
     return platforms.get(name);
@@ -216,7 +216,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
             case 'search_products': {
                 const { query, platforms: platformList, pincode } = args;
                 const results = [];
-                for (const platformName of platformList === 'all' ? ['zepto'] : platformList) {
+                for (const platformName of platformList === 'all' ? ALL_PLATFORMS : platformList) {
                     try {
                         // Check login first
                         const platform = await getPlatform(platformName);
@@ -277,7 +277,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
             case 'check_login_status': {
                 const { platforms: platformList } = args;
                 const statuses = [];
-                for (const platformName of platformList === 'all' ? ['zepto'] : platformList) {
+                for (const platformName of platformList === 'all' ? ALL_PLATFORMS : platformList) {
                     try {
                         const platform = await getPlatform(platformName);
                         const status = await platform.checkLogin();

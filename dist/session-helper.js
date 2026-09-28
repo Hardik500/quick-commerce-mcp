@@ -1,70 +1,47 @@
 /**
- * Debug script to capture authenticated session from a real browser
+ * Session persistence helpers, shared by the MCP server and platform
+ * implementations.
  *
- * Run this after manually logging in to Zepto through Playwright's debug mode:
+ * Sessions are stored as Playwright `storageState()` snapshots (cookies +
+ * localStorage + sessionStorage), not just cookies, since SPAs like Zepto
+ * keep auth tokens in localStorage.
  *
- * 1. Run: npx playwright codegen --device="iPhone 14" https://www.zeptonow.com
- * 2. Log in with OTP in the opened browser
- * 3. Close the browser
- * 4. Copy the session data from the Playwright trace
- *
- * Or use this script with a pre-authenticated session export.
+ * Interactive login usage:
+ *   npx tsx src/session-helper.ts login zepto
+ *   -> log in manually in the opened browser, then press Ctrl+C.
+ *      The session is saved on SIGINT/SIGTERM before the process exits.
  */
-import { chromium } from 'playwright';
 import * as fs from 'fs';
 import * as path from 'path';
+import { StealthBrowser } from './engine/stealth-browser.js';
 const SESSION_DIR = path.join(process.cwd(), 'data', 'sessions');
-export async function saveSession(context, platform) {
-    const sessionPath = path.join(SESSION_DIR, `${platform}-session.json`);
+const PLATFORM_URLS = {
+    zepto: 'https://www.zeptonow.com',
+    swiggy: 'https://www.swiggy.com/instamart',
+    'swiggy-instamart': 'https://www.swiggy.com/instamart',
+    blinkit: 'https://www.blinkit.com',
+};
+/** Canonical session file name for a platform (aliases collapse to one file). */
+function canonicalPlatform(platform) {
+    return platform === 'swiggy' ? 'swiggy-instamart' : platform;
+}
+export function ensureSessionDir() {
     if (!fs.existsSync(SESSION_DIR)) {
         fs.mkdirSync(SESSION_DIR, { recursive: true });
     }
-    const cookies = await context.cookies();
-    const localStorage = await context.pages()[0]?.evaluate(() => {
-        const items = {};
-        for (let i = 0; i < localStorage.length; i++) {
-            const key = localStorage.key(i);
-            if (key) {
-                items[key] = localStorage.getItem(key) || '';
-            }
-        }
-        return items;
-    });
-    fs.writeFileSync(sessionPath, JSON.stringify({
-        cookies,
-        localStorage,
-        savedAt: new Date().toISOString(),
-    }, null, 2));
-    console.log(`✅ Session saved to ${sessionPath}`);
 }
-export async function loadSession(context, platform) {
-    const sessionPath = path.join(SESSION_DIR, `${platform}-session.json`);
-    if (!fs.existsSync(sessionPath)) {
-        console.log(`No saved session found at ${sessionPath}`);
-        return false;
-    }
-    try {
-        const sessionData = JSON.parse(fs.readFileSync(sessionPath, 'utf-8'));
-        // Check if session is recent (within 24 hours)
-        const savedAt = new Date(sessionData.savedAt);
-        const hoursAgo = (Date.now() - savedAt.getTime()) / (1000 * 60 * 60);
-        if (hoursAgo > 24) {
-            console.log(`⚠️ Session is ${hoursAgo.toFixed(1)} hours old, may be expired`);
-        }
-        // Restore cookies
-        await context.addCookies(sessionData.cookies);
-        console.log(`✅ Loaded ${sessionData.cookies.length} cookies`);
-        return true;
-    }
-    catch (error) {
-        console.log(`❌ Failed to load session: ${error}`);
-        return false;
-    }
+export function sessionPath(platform) {
+    return path.join(SESSION_DIR, `${canonicalPlatform(platform)}-session.json`);
 }
 /**
- * Interactive login helper - opens a browser for manual login
+ * Interactive login helper - opens a browser for manual login.
+ * Saves the session (storageState) when the user presses Ctrl+C.
  */
 export async function interactiveLogin(platform) {
+    const url = PLATFORM_URLS[platform];
+    if (!url) {
+        throw new Error(`Unknown platform: ${platform}`);
+    }
     console.log(`\n🔐 Interactive Login for ${platform.toUpperCase()}`);
     console.log('=====================================\n');
     console.log('A browser window will open. Please:');
@@ -72,37 +49,44 @@ export async function interactiveLogin(platform) {
     console.log('2. Enter your phone number');
     console.log('3. Enter the OTP you receive');
     console.log('4. Complete the login process');
-    console.log('\nThe session will be saved automatically.\n');
-    const browser = await chromium.launch({
+    console.log('\nPress Ctrl+C when done - the session will be saved then.\n');
+    const stealth = new StealthBrowser();
+    const savedSession = sessionPath(platform);
+    const context = await stealth.launch({
         headless: false,
-        slowMo: 500,
+        slowMo: 200,
+        storageStatePath: fs.existsSync(savedSession) ? savedSession : undefined,
     });
-    const context = await browser.newContext({
-        viewport: { width: 390, height: 844 },
-        userAgent: 'Mozilla/5.0 (iPhone; CPU iPhone OS 16_6 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/16.6 Mobile/15E148 Safari/604.1',
-        locale: 'en-IN',
-        timezoneId: 'Asia/Kolkata',
-    });
-    // Open DevTools manually - devtools option not available in launchOptions
     const page = await context.newPage();
-    // Try to load existing session
-    await loadSession(context, platform);
-    const url = platform === 'zepto'
-        ? 'https://www.zeptonow.com'
-        : platform === 'swiggy' || platform === 'swiggy-instamart'
-            ? 'https://www.swiggy.com/instamart'
-            : 'https://www.blinkit.com';
     console.log(`📱 Navigating to ${url}...`);
     await page.goto(url, { waitUntil: 'domcontentloaded' });
     console.log('\n⏳ Waiting for you to log in...');
     console.log('Press Ctrl+C when you have successfully logged in.\n');
-    // Wait indefinitely until user closes
-    await new Promise(() => { }); // Never resolves, user must Ctrl+C
+    ensureSessionDir();
+    const filePath = sessionPath(platform);
+    const saveAndExit = async () => {
+        try {
+            await context.storageState({ path: filePath });
+            console.log(`\n✅ Session saved to ${filePath}`);
+        }
+        catch (error) {
+            console.error('❌ Failed to save session:', error);
+        }
+        finally {
+            process.exit(0);
+        }
+    };
+    process.on('SIGINT', saveAndExit);
+    process.on('SIGTERM', saveAndExit);
+    // Also save+exit if the user closes the browser window directly (instead
+    // of pressing Ctrl+C), so that path doesn't lose the session either.
+    context.on('close', saveAndExit);
+    // Wait indefinitely until Ctrl+C or the browser closes (handled above)
+    await new Promise(() => { });
 }
 // CLI usage
 const args = process.argv.slice(2);
 if (args[0] === 'login' && args[1]) {
     interactiveLogin(args[1]).catch(console.error);
 }
-export { SESSION_DIR };
 //# sourceMappingURL=session-helper.js.map

@@ -3,6 +3,7 @@
  * Combines playwright-stealth with custom evasion techniques
  */
 import { chromium, BrowserContext, Browser } from 'playwright';
+import * as fs from 'fs';
 import { stealthScript } from './stealth-script.js';
 
 export interface StealthConfig {
@@ -11,6 +12,7 @@ export interface StealthConfig {
   proxy?: string;
   userAgent?: string;
   viewport?: { width: number; height: number };
+  storageStatePath?: string;
 }
 
 export class StealthBrowser {
@@ -24,13 +26,24 @@ export class StealthBrowser {
       proxy,
       userAgent = 'Mozilla/5.0 (iPhone; CPU iPhone OS 16_6 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/16.6 Mobile/15E148 Safari/604.1',
       viewport = { width: 390, height: 844 },
+      storageStatePath,
     } = config;
 
-    // Launch with anti-detection args
+    // Launch with anti-detection args. Uses the system-installed Google
+    // Chrome (channel: 'chrome') instead of Playwright's bundled Chromium,
+    // since downloading/extracting the bundled browser is impractically
+    // slow on machines with endpoint security scanning every written file.
     this.browser = await chromium.launch({
+      channel: 'chrome',
       headless,
       slowMo,
       proxy: proxy ? { server: proxy } : undefined,
+      // Playwright installs its own SIGINT/SIGTERM handlers that close the
+      // browser immediately on signal receipt, racing our own handlers that
+      // need the browser alive to call storageState() first. Disabling lets
+      // callers (e.g. session-helper.ts) own shutdown ordering.
+      handleSIGINT: false,
+      handleSIGTERM: false,
       args: [
         '--disable-blink-features=AutomationControlled',
         '--disable-features=IsolateOrigins,site-per-process',
@@ -78,6 +91,7 @@ export class StealthBrowser {
       colorScheme: 'light',
       reducedMotion: 'no-preference',
       forcedColors: 'none',
+      storageState: storageStatePath && fs.existsSync(storageStatePath) ? storageStatePath : undefined,
     });
 
     // Apply stealth script to all pages

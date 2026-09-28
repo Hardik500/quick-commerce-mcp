@@ -2,7 +2,9 @@
 
 ## The Problem
 
-Quick commerce platforms (Zepto, Swiggy Instamart, Blinkit) use aggressive bot detection via CloudFront/Cloudflare. Running Playwright in headless mode results in **403 Forbidden** errors.
+Quick commerce platforms (Zepto, Swiggy Instamart, Blinkit) use aggressive bot detection via CloudFront/Cloudflare. Running Playwright in headless mode with a fresh, unauthenticated browser results in **403 Forbidden** errors.
+
+The fix is the `StealthBrowser` (`playwright-stealth`) plus a saved, authenticated session — headless requests replaying a real login's cookies/localStorage pass the same bot checks that block a bare headless launch.
 
 ## Solutions
 
@@ -14,9 +16,17 @@ Use the session helper to log in manually and save the authenticated session:
 # This opens a real browser where you can log in manually
 npx tsx src/session-helper.ts login zepto
 
-# After logging in, the session is saved automatically
-# The MCP server will use this saved session for subsequent requests
+# Log in (phone + OTP), then press Ctrl+C once you're on the logged-in
+# homepage. The session is saved via Playwright's storageState()
+# (cookies + localStorage + sessionStorage) to data/sessions/<platform>-session.json.
+# The MCP server restores this same storageState for subsequent headless requests.
 ```
+
+Session persistence is `storageState()`-based, not cookie-only — this matters because
+Zepto's auth relies on localStorage tokens in addition to cookies. `StealthBrowser`
+launches Chromium with `handleSIGINT: false` / `handleSIGTERM: false` so its own
+`SIGINT`/`SIGTERM` handler (in `src/session-helper.ts`) owns shutdown ordering and
+reliably writes the session file before the browser closes.
 
 ### Option 2: Use a Proxy Service
 
@@ -45,9 +55,9 @@ const browser = await chromium.connect('wss://cloud.browserless.io?token=YOUR_TO
 
 | Platform | Status | Notes |
 |----------|--------|-------|
-| Zepto | ⚠️ Blocked | CloudFront bot detection active |
-| Swiggy Instamart | 🔧 TODO | Not yet implemented |
-| Blinkit | 🔧 TODO | Not yet implemented |
+| Zepto | ✅ Working | Login, `search_products`, and `add_to_cart` verified end-to-end via a real MCP client against a saved session |
+| Swiggy Instamart | 🔧 Speculative | Login/save-session flow wired up (`submitOtp` saves session), but selectors are unverified — no authenticated session captured yet |
+| Blinkit | 🔧 Speculative | Same as Swiggy Instamart — selectors unverified, `search()` fails with "Search input not found" against the live site |
 
 ## How to Use
 
@@ -66,25 +76,21 @@ const browser = await chromium.connect('wss://cloud.browserless.io?token=YOUR_TO
    mcporter call quick-commerce.search_products query="milk" platforms='["zepto"]'
    ```
 
-## Files Created
+## Key Files
 
-- `src/session-helper.ts` - Interactive login helper
-- `src/platforms/zepto.ts` - Updated with session persistence
-- `data/sessions/` - Saved browser sessions (gitignored)
+- `src/session-helper.ts` - Interactive login helper; exposes `sessionPath(platform)` and saves `storageState()` on `SIGINT`/`SIGTERM`
+- `src/engine/stealth-browser.ts` - Wraps Playwright + `playwright-stealth`; accepts `storageStatePath` to restore a saved session on launch
+- `src/platforms/zepto.ts` - Real, verified selectors (search, product cards, add-to-cart)
+- `data/sessions/` - Saved browser sessions, one JSON file per platform (gitignored)
 
-## Debug Scripts
+## Debugging Selectors
 
-Run these to test browser access:
+To inspect the authenticated DOM and re-derive selectors if a platform changes its markup:
 
 ```bash
-# Headless with trace (doesn't work due to CloudFront)
-npx tsx scripts/debug-zepto-headless.ts
-
-# Stealth mode (still blocked)
-npx tsx scripts/debug-zepto-stealth.ts
+# Requires an existing session file for the platform (see Option 1 above)
+npx tsx scripts/inspect-selectors.ts
 ```
 
-Open trace with:
-```bash
-npx playwright show-trace trace.zip
-```
+The older `scripts/debug-zepto-*.ts` scripts predate the stealth+session fix and are kept
+only as a record of the original CloudFront-blocking investigation.

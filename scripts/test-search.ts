@@ -2,22 +2,20 @@
  * Direct test of quick commerce platforms
  * Run: npx tsx scripts/test-search.ts
  */
-import { chromium } from 'playwright';
+import { StealthBrowser } from '../src/engine/stealth-browser.js';
+import { sessionPath } from '../src/session-helper.js';
 import { ZeptoPlatform } from '../src/platforms/zepto.js';
 import { BlinkitPlatform } from '../src/platforms/blinkit.js';
 
 async function testSearch() {
   console.log('🚀 Starting live search test for "6 pack Coke Zero"\n');
 
-  // Launch browser
-  const browser = await chromium.launch({ 
+  // Launch browser, restoring any saved authenticated session per platform.
+  const stealth = new StealthBrowser();
+  const context = await stealth.launch({
     headless: true, // Set false to see browser
-    slowMo: 50
-  });
-
-  const context = await browser.newContext({
-    userAgent: 'Mozilla/5.0 (iPhone; CPU iPhone OS 16_6 like Mac OS X) AppleWebKit/605.1.15',
-    viewport: { width: 390, height: 844 },
+    slowMo: 50,
+    storageStatePath: sessionPath('zepto'),
   });
 
   try {
@@ -74,7 +72,7 @@ async function testSearch() {
   } catch (error) {
     console.error('❌ Test error:', error);
   } finally {
-    await browser.close();
+    await stealth.close();
     console.log('\n🏁 Browser closed.');
   }
 }

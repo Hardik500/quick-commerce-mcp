@@ -12,10 +12,9 @@ import { BrowserContext } from 'playwright';
 import { QuickCommercePlatform, SearchResult, CartSummary, Address } from './base.js';
 export declare class ZeptoPlatform extends QuickCommercePlatform {
     private selectors;
-    private sessionLoaded;
     constructor();
     initialize(context: BrowserContext): Promise<void>;
-    private loadSession;
+    /** Persist cookies + localStorage so the next run starts already logged in. */
     saveSession(): Promise<void>;
     checkLogin(): Promise<{
         loggedIn: boolean;

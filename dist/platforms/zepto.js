@@ -1,33 +1,34 @@
-import * as fs from 'fs';
-import * as path from 'path';
 import { QuickCommercePlatform, } from './base.js';
-const SESSION_DIR = path.join(process.cwd(), 'data', 'sessions');
+import { sessionPath, ensureSessionDir } from '../session-helper.js';
 export class ZeptoPlatform extends QuickCommercePlatform {
+    // Verified against the live site with an authenticated session
+    // (scripts/inspect-selectors.ts inspectZeptoAuthenticated) on 2026-09-28.
     selectors = {
-        searchInput: '[data-testid="search-input"], input[placeholder*="search"], input[placeholder*="Search"], input[role="searchbox"], [class*="SearchBar"] input',
-        searchResults: '[data-testid="product-card"], .product-card, [class*="ProductCard"], [class*="product"], [data-sku]',
-        productName: '[data-testid="product-name"], .product-name, h3, h4, [class*="productName"], [class*="title"]',
-        productPrice: '[data-testid="product-price"], .price, span[class*="price"], [class*="Price"], [class*="offer"]',
-        productMRP: '[data-testid="product-mrp"], .mrp, span[class*="mrp"], [class*="strike"], [class*="Mrp"]',
-        addToCartButton: '[data-testid="add-to-cart"], button:has-text("Add"), button[class*="add"], [class*="AddToCart"]',
-        quantitySelector: '[data-testid="quantity"], .quantity, [class*="Quantity"]',
+        searchInput: 'input[role="combobox"]',
+        searchResults: 'a[data-testid="product-card"]',
+        productName: '[data-slot-id="ProductName"]',
+        productPrice: '[data-slot-id="EdlpPrice"]',
+        productMRP: '[data-slot-id="Mrp"]',
+        addToCartButton: 'button:has-text("ADD")',
+        incrementButton: 'button[aria-label="Increase quantity"]',
+        decrementButton: 'button[aria-label="Decrease quantity"]',
         cartIcon: '[data-testid="cart"], a[href*="cart"], button[class*="cart"], [class*="CartIcon"]',
         cartItems: '[data-testid="cart-item"], .cart-item, [class*="CartItem"]',
-        loginButton: 'button:has-text("Login"), button:has-text("Sign in"), [class*="loginBtn"], a[href*="login"]',
+        loginButton: 'button[aria-label="login" i]',
         phoneInput: 'input[type="tel"], input[placeholder*="phone"], input[placeholder*="mobile"], input[placeholder*="number"]',
-        otpInput: 'input[type="number"], input[placeholder*="OTP"], input[placeholder*="code"], input[maxlength="6"]',
-        addressSelector: '[data-testid="address"], .address, [class*="AddressCard"]',
+        otpInput: 'input[aria-label="OTP" i], input[autocomplete="one-time-code"]',
+        addressSelector: '[data-testid="user-address"], .address, [class*="AddressCard"]',
         // CloudFront detection
         blockedPage: 'h1:has-text("403"), h2:has-text("Request blocked"), h1:has-text("ERROR")',
     };
-    sessionLoaded = false;
     constructor() {
         super('zepto', 'https://www.zeptonow.com');
     }
     async initialize(context) {
         this.context = context;
-        // Try to load saved session
-        await this.loadSession();
+        // Session (cookies + localStorage) is restored via storageState when the
+        // context is created (see session-helper.ts / index.ts), so nothing to
+        // load here.
         this.page = await context.newPage();
         // Set viewport to mobile for better compatibility
         await this.page.setViewportSize({ width: 390, height: 844 });
@@ -54,46 +55,35 @@ export class ZeptoPlatform extends QuickCommercePlatform {
             console.error('❌ Zepto blocked the request (bot detection)');
         }
     }
-    async loadSession() {
-        const sessionPath = path.join(SESSION_DIR, 'zepto-session.json');
-        if (fs.existsSync(sessionPath)) {
-            try {
-                const sessionData = JSON.parse(fs.readFileSync(sessionPath, 'utf-8'));
-                await this.context.addCookies(sessionData.cookies);
-                this.sessionLoaded = true;
-                console.log('✅ Loaded saved Zepto session');
-            }
-            catch (error) {
-                console.log('⚠️ Failed to load saved session:', error);
-            }
-        }
-    }
+    /** Persist cookies + localStorage so the next run starts already logged in. */
     async saveSession() {
         if (!this.context)
             return;
-        if (!fs.existsSync(SESSION_DIR)) {
-            fs.mkdirSync(SESSION_DIR, { recursive: true });
-        }
-        const sessionPath = path.join(SESSION_DIR, 'zepto-session.json');
-        const cookies = await this.context.cookies();
-        fs.writeFileSync(sessionPath, JSON.stringify({
-            cookies,
-            savedAt: new Date().toISOString(),
-        }, null, 2));
-        console.log('✅ Session saved to', sessionPath);
+        ensureSessionDir();
+        const filePath = sessionPath('zepto');
+        await this.context.storageState({ path: filePath });
+        console.log('✅ Session saved to', filePath);
     }
     async checkLogin() {
         if (!this.page)
             throw new Error('Platform not initialized');
         try {
-            // Check for login button or user avatar
+            // The login button only appears after the SPA hydrates, so a check
+            // performed too early would falsely report "logged in".
+            await this.page.waitForLoadState('networkidle', { timeout: 10000 }).catch(() => { });
+            // CloudFront/WAF block pages have no login UI either - detect them
+            // explicitly so they aren't mistaken for a logged-in state.
+            const blockedEl = await this.page.$(this.selectors.blockedPage);
+            if (blockedEl) {
+                console.error('❌ Zepto blocked the request (bot detection) - cannot determine login state');
+                this.isLoggedIn = false;
+                return { loggedIn: false };
+            }
             const loginButton = await this.page.$(this.selectors.loginButton);
             if (!loginButton) {
-                // No login button = probably logged in
                 this.isLoggedIn = true;
                 return { loggedIn: true };
             }
-            // Check if there's an existing session
             const cookies = await this.context.cookies();
             const sessionCookie = cookies.find(c => c.name.includes('session') || c.name.includes('token'));
             if (sessionCookie && sessionCookie.expires && sessionCookie.expires > Date.now() / 1000) {
@@ -127,6 +117,9 @@ export class ZeptoPlatform extends QuickCommercePlatform {
             }
             // Check if login succeeded
             const loginCheck = await this.checkLogin();
+            if (loginCheck.loggedIn) {
+                await this.saveSession();
+            }
             return loginCheck.loggedIn;
         }
         catch (error) {
@@ -141,7 +134,9 @@ export class ZeptoPlatform extends QuickCommercePlatform {
             throw new Error('Not logged in. Please login first.');
         }
         try {
-            // Click on search input
+            // The homepage search bar is a link to a dedicated /search page - the
+            // actual text input only exists there, not on the homepage itself.
+            await this.page.goto(`${this.baseUrl}/search`, { waitUntil: 'domcontentloaded', timeout: 30000 });
             const searchInput = await this.page.$(this.selectors.searchInput);
             if (!searchInput) {
                 throw new Error('Search input not found');
@@ -190,11 +185,12 @@ export class ZeptoPlatform extends QuickCommercePlatform {
                     catch {
                         mrp = undefined;
                     }
-                    // Extract product ID from data attribute or URL
+                    // Product cards all share data-testid="product-card"; the unique
+                    // ID lives in the "pvid" segment of the card's link href instead.
                     const productId = await element.evaluate(el => {
-                        return el.getAttribute('data-product-id') ||
-                            el.getAttribute('data-testid') ||
-                            Math.random().toString(36).substring(7);
+                        const href = el.getAttribute('href') || '';
+                        const match = href.match(/\/pvid\/([^/?]+)/);
+                        return match ? match[1] : Math.random().toString(36).substring(7);
                     });
                     products.push({
                         id: productId,
@@ -230,8 +226,9 @@ export class ZeptoPlatform extends QuickCommercePlatform {
         if (!this.page)
             throw new Error('Platform not initialized');
         try {
-            // Find product by ID and click add to cart
-            const product = await this.page.$(`[data-product-id="${productId}"], [data-testid="${productId}"]`);
+            // Product cards all share data-testid="product-card"; find the one
+            // whose href contains the pvid we extracted during search.
+            const product = await this.page.$(`${this.selectors.searchResults}[href*="/pvid/${productId}"]`);
             if (!product) {
                 console.log('Product not found:', productId);
                 return false;
@@ -246,7 +243,7 @@ export class ZeptoPlatform extends QuickCommercePlatform {
             // Handle quantity if > 1
             if (quantity > 1) {
                 for (let i = 1; i < quantity; i++) {
-                    const incrementButton = await product.$('[data-testid="increment"], button:has-text("+")');
+                    const incrementButton = await product.$(this.selectors.incrementButton);
                     if (incrementButton) {
                         await incrementButton.click();
                         await this.page.waitForTimeout(500);

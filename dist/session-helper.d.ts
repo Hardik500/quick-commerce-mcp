@@ -1,21 +1,21 @@
 /**
- * Debug script to capture authenticated session from a real browser
+ * Session persistence helpers, shared by the MCP server and platform
+ * implementations.
  *
- * Run this after manually logging in to Zepto through Playwright's debug mode:
+ * Sessions are stored as Playwright `storageState()` snapshots (cookies +
+ * localStorage + sessionStorage), not just cookies, since SPAs like Zepto
+ * keep auth tokens in localStorage.
  *
- * 1. Run: npx playwright codegen --device="iPhone 14" https://www.zeptonow.com
- * 2. Log in with OTP in the opened browser
- * 3. Close the browser
- * 4. Copy the session data from the Playwright trace
- *
- * Or use this script with a pre-authenticated session export.
+ * Interactive login usage:
+ *   npx tsx src/session-helper.ts login zepto
+ *   -> log in manually in the opened browser, then press Ctrl+C.
+ *      The session is saved on SIGINT/SIGTERM before the process exits.
  */
-declare const SESSION_DIR: string;
-export declare function saveSession(context: any, platform: string): Promise<void>;
-export declare function loadSession(context: any, platform: string): Promise<boolean>;
+export declare function ensureSessionDir(): void;
+export declare function sessionPath(platform: string): string;
 /**
- * Interactive login helper - opens a browser for manual login
+ * Interactive login helper - opens a browser for manual login.
+ * Saves the session (storageState) when the user presses Ctrl+C.
  */
 export declare function interactiveLogin(platform: string): Promise<void>;
-export { SESSION_DIR };
 //# sourceMappingURL=session-helper.d.ts.map

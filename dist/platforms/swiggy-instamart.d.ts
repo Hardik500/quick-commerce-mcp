@@ -15,6 +15,8 @@ export declare class SwiggyInstamartPlatform extends QuickCommercePlatform {
         phone?: string;
     }>;
     submitOtp(otp: string): Promise<boolean>;
+    /** Persist cookies + localStorage so the next run starts already logged in. */
+    saveSession(): Promise<void>;
     search(query: string, location?: string): Promise<SearchResult>;
     private setDeliveryLocation;
     private extractProductResults;

@@ -11,6 +11,7 @@ import {
   CartItem,
   Address,
 } from './base.js';
+import { sessionPath, ensureSessionDir } from '../session-helper.js';
 
 export class SwiggyInstamartPlatform extends QuickCommercePlatform {
   private selectors = {
@@ -121,11 +122,24 @@ export class SwiggyInstamartPlatform extends QuickCommercePlatform {
 
       // Check if login succeeded
       const loginCheck = await this.checkLogin();
+      if (loginCheck.loggedIn) {
+        await this.saveSession();
+      }
       return loginCheck.loggedIn;
     } catch (error) {
       console.error('Error submitting OTP:', error);
       return false;
     }
+  }
+
+  /** Persist cookies + localStorage so the next run starts already logged in. */
+  async saveSession(): Promise<void> {
+    if (!this.context) return;
+
+    ensureSessionDir();
+    const filePath = sessionPath('swiggy-instamart');
+    await this.context.storageState({ path: filePath });
+    console.log('✅ Session saved to', filePath);
   }
 
   async search(query: string, location?: string): Promise<SearchResult> {

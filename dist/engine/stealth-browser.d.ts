@@ -12,6 +12,7 @@ export interface StealthConfig {
         width: number;
         height: number;
     };
+    storageStatePath?: string;
 }
 export declare class StealthBrowser {
     private browser;

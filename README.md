@@ -35,9 +35,12 @@ npm run build
 
 | Platform | Search | Cart | Order | Notes |
 |----------|--------|------|-------|-------|
-| Zepto | ✅ | ✅ | ✅ | 10-min delivery |
-| Swiggy Instamart | ✅ | ✅ | ✅ | Good variety |
+| Zepto | ✅ | ✅ | 🚧 | Login + search + add-to-cart verified end-to-end |
+| Swiggy Instamart | 🚧 | 🚧 | 🚧 | Login flow wired up; selectors unverified (no session captured yet) |
+| Blinkit | 🚧 | 🚧 | 🚧 | Login flow wired up; selectors unverified (no session captured yet) |
 | BigBasket | 🚧 | 🚧 | 🚧 | Coming in v1.1 |
+
+See [AUTHENTICATION.md](AUTHENTICATION.md) for how to log in to a platform and save a session.
 
 ## 📝 Usage Examples
 
@@ -84,8 +87,9 @@ npm run build
 ## 📋 Roadmap
 
 ### v1.0 (Current)
-- [x] Zepto automation
-- [ ] Swiggy Instamart
+- [x] Zepto automation (login, search, add-to-cart)
+- [ ] Swiggy Instamart (selectors unverified)
+- [ ] Blinkit (selectors unverified)
 - [ ] Price comparison
 - [ ] Basic cart management
 

@@ -1,3 +1,4 @@
+#!/usr/bin/env node
 /**
  * Session persistence helpers, shared by the MCP server and platform
  * implementations.

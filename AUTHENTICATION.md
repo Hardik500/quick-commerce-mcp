@@ -18,7 +18,8 @@ npx tsx src/session-helper.ts login zepto
 
 # Log in (phone + OTP), then press Ctrl+C once you're on the logged-in
 # homepage. The session is saved via Playwright's storageState()
-# (cookies + localStorage + sessionStorage) to data/sessions/<platform>-session.json.
+# (cookies + localStorage + sessionStorage) to
+# ~/.quick-commerce-mcp/sessions/<platform>-session.json.
 # The MCP server restores this same storageState for subsequent headless requests.
 ```
 
@@ -81,7 +82,7 @@ const browser = await chromium.connect('wss://cloud.browserless.io?token=YOUR_TO
 - `src/session-helper.ts` - Interactive login helper; exposes `sessionPath(platform)` and saves `storageState()` on `SIGINT`/`SIGTERM`
 - `src/engine/stealth-browser.ts` - Wraps Playwright + `playwright-stealth`; accepts `storageStatePath` to restore a saved session on launch
 - `src/platforms/zepto.ts` - Real, verified selectors (search, product cards, add-to-cart)
-- `data/sessions/` - Saved browser sessions, one JSON file per platform (gitignored)
+- `~/.quick-commerce-mcp/sessions/` - Saved browser sessions, one JSON file per platform (outside the repo, so it survives regardless of where/how the server is installed, e.g. via `npx`)
 
 ## Debugging Selectors
 

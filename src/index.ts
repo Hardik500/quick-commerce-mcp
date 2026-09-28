@@ -1,3 +1,4 @@
+#!/usr/bin/env node
 /**
  * MCP Server Entry Point
  * Implements Model Context Protocol for quick commerce aggregation

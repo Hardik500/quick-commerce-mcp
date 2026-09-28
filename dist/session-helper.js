@@ -1,3 +1,4 @@
+#!/usr/bin/env node
 /**
  * Session persistence helpers, shared by the MCP server and platform
  * implementations.
@@ -12,9 +13,13 @@
  *      The session is saved on SIGINT/SIGTERM before the process exits.
  */
 import * as fs from 'fs';
+import * as os from 'os';
 import * as path from 'path';
 import { StealthBrowser } from './engine/stealth-browser.js';
-const SESSION_DIR = path.join(process.cwd(), 'data', 'sessions');
+// Uses the user's home directory, not process.cwd(), since this is invoked
+// via `npx quick-commerce-mcp` where cwd is an ephemeral npx cache dir that
+// differs across runs - a relative path here would lose the session every time.
+const SESSION_DIR = path.join(os.homedir(), '.quick-commerce-mcp', 'sessions');
 const PLATFORM_URLS = {
     zepto: 'https://www.zeptonow.com',
     swiggy: 'https://www.swiggy.com/instamart',
@@ -84,9 +89,21 @@ export async function interactiveLogin(platform) {
     // Wait indefinitely until Ctrl+C or the browser closes (handled above)
     await new Promise(() => { });
 }
-// CLI usage
-const args = process.argv.slice(2);
-if (args[0] === 'login' && args[1]) {
-    interactiveLogin(args[1]).catch(console.error);
+// CLI usage. Supports both:
+//   npx tsx src/session-helper.ts login <platform>   (dev)
+//   npx quick-commerce-mcp-login <platform>           (published bin, "login" implied by the command name)
+// Guarded so importing this module as a library (e.g. from index.ts for
+// sessionPath()) doesn't also trigger the CLI / process.exit(1).
+const isMain = process.argv[1] && import.meta.url === `file://${process.argv[1]}`;
+if (isMain) {
+    const args = process.argv.slice(2);
+    const platformArg = args[0] === 'login' ? args[1] : args[0];
+    if (platformArg) {
+        interactiveLogin(platformArg).catch(console.error);
+    }
+    else {
+        console.error('Usage: quick-commerce-mcp-login <platform>  (e.g. zepto)');
+        process.exit(1);
+    }
 }
 //# sourceMappingURL=session-helper.js.map

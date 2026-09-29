@@ -32,7 +32,16 @@ export class ZeptoPlatform extends QuickCommercePlatform {
     incrementButton: 'button[aria-label="Increase quantity"]',
     decrementButton: 'button[aria-label="Decrease quantity"]',
     cartIcon: '[data-testid="cart"], a[href*="cart"], button[class*="cart"], [class*="CartIcon"]',
-    cartItems: '[data-testid="cart-item"], .cart-item, [class*="CartItem"]',
+    // /cart page structure (scripts/qc-cart-probe.mts style probe on
+    // 2026-09-29). Each row is a div wrapping the product link and a
+    // per-row stepper whose quantity testid ends in "-cart-qty".
+    cartItems: 'div:has(> a[href*="/pvid/"]):has([data-testid$="-cart-qty"])',
+    cartItemName: '.__4sxPD',
+    cartItemVariant: '.K96_o',
+    cartItemQty: '[data-testid$="-cart-qty"]',
+    cartItemMinus: '[data-testid$="-minus-btn"]',
+    billItemTotal: 'div.flex.justify-between:has(span:text-is("Item Total"))',
+    billToPay: 'div.flex.justify-between:has(span:text-is("To Pay"))',
     loginButton: 'button[aria-label="login" i]',
     phoneInput: 'input[type="tel"], input[placeholder*="phone"], input[placeholder*="mobile"], input[placeholder*="number"]',
     otpInput: 'input[aria-label="OTP" i], input[autocomplete="one-time-code"]',
@@ -307,25 +316,37 @@ export class ZeptoPlatform extends QuickCommercePlatform {
     }
   }
 
+  private async openCart(): Promise<void> {
+    if (!this.page) return;
+    await this.page.goto(`${this.baseUrl}/cart`, { waitUntil: 'domcontentloaded', timeout: 30000 });
+    await this.page.waitForTimeout(3000);
+  }
+
+  // Bill rows can hold a strikethrough original price alongside the final
+  // one (e.g. "₹229 ₹184"); take the last ₹ amount as the actual value.
+  private lastPrice(text: string): number {
+    const matches = [...text.matchAll(/₹\s*[\d,.]+/g)];
+    return matches.length ? this.parsePrice(matches[matches.length - 1][0]) : 0;
+  }
+
   async getCart(): Promise<CartSummary | null> {
     if (!this.page) throw new Error('Platform not initialized');
 
     try {
-      // Navigate to cart
-      await this.page.goto(`${this.baseUrl}/cart`, { waitUntil: 'domcontentloaded' });
-      await this.page.waitForTimeout(2000);
-
+      await this.openCart();
       const cartItems = await this.extractCartItems();
-      
-      // Calculate totals (simplified - would need actual selectors)
-      const subtotal = cartItems.reduce((sum, item) => sum + (item.price * item.cartQuantity), 0);
-      
+
+      const itemTotalText = await this.page.locator(this.selectors.billItemTotal).first().textContent().catch(() => null);
+      const toPayText = await this.page.locator(this.selectors.billToPay).first().textContent().catch(() => null);
+      const subtotal = itemTotalText ? this.lastPrice(itemTotalText) : cartItems.reduce((sum, item) => sum + item.price * item.cartQuantity, 0);
+      const total = toPayText ? this.lastPrice(toPayText) : subtotal;
+
       return {
         platform: this.name,
         items: cartItems,
         subtotal,
-        deliveryFee: 0, // Would extract from page
-        total: subtotal,
+        deliveryFee: total - subtotal,
+        total,
       };
     } catch (error) {
       console.error('Error getting cart:', error);
@@ -337,24 +358,26 @@ export class ZeptoPlatform extends QuickCommercePlatform {
     if (!this.page) return [];
 
     const items: CartItem[] = [];
-    
+
     try {
       const cartElements = await this.page.$$(this.selectors.cartItems);
-      
+
       for (const element of cartElements) {
         try {
-          const name = await element.$eval('.item-name, [data-testid="item-name"]', el => el.textContent?.trim() || '');
-          const priceText = await element.$eval('.item-price, [data-testid="item-price"]', el => el.textContent?.trim() || '');
-          const price = this.parsePrice(priceText);
-          const quantityText = await element.$eval('.quantity, [data-testid="quantity"]', el => el.textContent?.trim() || '1');
-          const cartQuantity = parseInt(quantityText) || 1;
+          const name = await element.$eval(this.selectors.cartItemName, el => el.textContent?.trim() || '');
+          const variant = await element.$eval(this.selectors.cartItemVariant, el => el.textContent?.trim() || '1 unit').catch(() => '1 unit');
+          const cartQuantity = await element.$eval(this.selectors.cartItemQty, el => parseInt(el.textContent?.trim() || '1', 10) || 1);
+          const priceText = await element.evaluate(el => el.textContent || '');
+          // Zepto shows the row's line total (price × cartQuantity), not the
+          // unit price, so divide it back out to match the Product contract.
+          const price = this.lastPrice(priceText) / cartQuantity;
 
           items.push({
-            id: Math.random().toString(36).substring(7), // Would extract actual ID
+            id: name,
             name,
             price,
             platform: this.name,
-            quantity: '1 unit',
+            quantity: variant,
             inStock: true,
             cartQuantity,
           });
@@ -370,15 +393,43 @@ export class ZeptoPlatform extends QuickCommercePlatform {
   }
 
   async removeFromCart(productId: string): Promise<boolean> {
-    // Implementation similar to addToCart
-    console.log('Remove from cart not yet implemented');
-    return false;
+    if (!this.page) throw new Error('Platform not initialized');
+
+    try {
+      await this.openCart();
+      // Decrement until the row disappears.
+      for (let i = 0; i < 50; i++) {
+        const row = this.page
+          .locator(this.selectors.cartItems)
+          .filter({ has: this.page.locator(this.selectors.cartItemName, { hasText: productId }) })
+          .first();
+        if ((await row.count()) === 0) return i > 0;
+        await row.locator(this.selectors.cartItemMinus).click();
+        await this.page.waitForTimeout(1000);
+      }
+      return false;
+    } catch (error) {
+      console.error('Error removing from cart:', error);
+      return false;
+    }
   }
 
   async clearCart(): Promise<boolean> {
-    // Would loop through cart items and remove all
-    console.log('Clear cart not yet implemented');
-    return false;
+    if (!this.page) throw new Error('Platform not initialized');
+
+    try {
+      await this.openCart();
+      for (let i = 0; i < 100; i++) {
+        const minus = await this.page.$(`${this.selectors.cartItems} ${this.selectors.cartItemMinus}`);
+        if (!minus) return true;
+        await minus.click();
+        await this.page.waitForTimeout(1000);
+      }
+      return false;
+    } catch (error) {
+      console.error('Error clearing cart:', error);
+      return false;
+    }
   }
 
   async getAddresses(): Promise<Address[]> {

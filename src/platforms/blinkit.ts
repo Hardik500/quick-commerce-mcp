@@ -36,7 +36,18 @@ export class BlinkitPlatform extends QuickCommercePlatform {
     incrementButton: 'button:has(.icon-plus)',
     decrementButton: 'button:has(.icon-minus)',
     cartIcon: 'button:has-text("Cart"), a[href*="cart"], [data-testid="cart"]',
-    cartItems: '[data-testid="cart-item"], div[class*="CartItem"], div[class*="cart-item"]',
+    // /cart page structure (scripts/inspect-blinkit-authed.ts style probe on
+    // 2026-09-29). Class names carry a styled-components hash suffix that can
+    // change on redeploy, so match by class-name prefix instead of full class.
+    cartItems: '[class*="CartProduct__Container"]',
+    cartItemName: '[class*="DefaultProductCard__ProductTitle"]',
+    cartItemVariant: '[class*="DefaultProductCard__ProductVariantContainer"]',
+    cartItemPrice: '[class*="DefaultProductCard__Price-"]',
+    cartStepper: '[class*="AddToCart__UpdatedButtonContainer"]',
+    cartStepperMinus: '[class*="AddToCart___StyledDiv-"]',
+    billRow: '[class*="BillCard__BillItemContainer"]',
+    billLabel: '[class*="BillCard__BillItemLeftHeaderTextContent"]',
+    billValue: '[class*="BillCard__BillItemRight"]',
     availability: '[data-testid="out-of-stock"], span[class*="out-of-stock"], div[class*="unavailable"]',
     // Login modal, triggered by clicking the profile icon.
     profileIcon: '[class*="profile" i]',
@@ -337,41 +348,38 @@ export class BlinkitPlatform extends QuickCommercePlatform {
     }
   }
 
+  private async openCart(): Promise<void> {
+    if (!this.page) return;
+    await this.page.goto(`${this.baseUrl}/cart`, { waitUntil: 'domcontentloaded', timeout: 30000 });
+    await this.page.waitForTimeout(3000);
+  }
+
   async getCart(): Promise<CartSummary | null> {
     if (!this.page) throw new Error('Platform not initialized');
 
     try {
-      // Click cart button
-      const cartBtn = await this.page.$(this.selectors.cartIcon);
-      if (cartBtn) {
-        await cartBtn.click();
-        await this.page.waitForTimeout(2000);
-      } else {
-        // Navigate directly to cart
-        await this.page.goto(`${this.baseUrl}/cart`, { waitUntil: 'networkidle' });
-        await this.page.waitForTimeout(2000);
-      }
-
+      await this.openCart();
       const cartItems = await this.extractCartItems();
-      const subtotal = cartItems.reduce((sum, item) => sum + (item.price * item.cartQuantity), 0);
 
-      // Try to extract delivery fee from page
-      let deliveryFee = 0;
-      try {
-        const feeText = await this.page.$eval('div[class*="delivery"], span[class*="delivery-fee"]', el => el.textContent);
-        if (feeText) {
-          deliveryFee = this.parsePrice(feeText);
-        }
-      } catch {
-        // Default to 0 if can't extract
-      }
+      // Bill rows (Items total / Delivery charge / Handling charge / Grand
+      // total) share one container; match by label text next to it.
+      const billValue = async (label: string): Promise<number> => {
+        const row = this.page!.locator(this.selectors.billRow).filter({
+          has: this.page!.locator(this.selectors.billLabel, { hasText: label }),
+        });
+        const text = await row.locator(this.selectors.billValue).first().textContent().catch(() => null);
+        return text ? this.parsePrice(text) : 0;
+      };
+
+      const subtotal = await billValue('Items total');
+      const total = await billValue('Grand total');
 
       return {
         platform: this.name,
         items: cartItems,
-        subtotal,
-        deliveryFee,
-        total: subtotal + deliveryFee,
+        subtotal: subtotal || cartItems.reduce((sum, item) => sum + item.price * item.cartQuantity, 0),
+        deliveryFee: total && subtotal ? total - subtotal : 0,
+        total: total || subtotal,
       };
     } catch (error) {
       console.error('Error getting cart:', error);
@@ -389,32 +397,30 @@ export class BlinkitPlatform extends QuickCommercePlatform {
 
       for (const element of cartElements) {
         try {
-          const name = await element.$eval(this.selectors.productName, el => el.textContent?.trim() || '');
-          const priceText = await element.$eval(this.selectors.productPrice, el => el.textContent?.trim() || '');
+          const name = await element.$eval(this.selectors.cartItemName, el => el.textContent?.trim() || '');
+          const variant = await element.$eval(this.selectors.cartItemVariant, el => el.textContent?.trim() || '1 unit').catch(() => '1 unit');
+          const priceText = await element.$eval(this.selectors.cartItemPrice, el => el.textContent?.trim() || '');
           const price = this.parsePrice(priceText);
 
-          // Get quantity
-          let cartQuantity = 1;
-          try {
-            const qtyText = await element.$eval('span[class*="quantity"], div[class*="qty"]', el => el.textContent?.trim());
-            if (qtyText) {
-              cartQuantity = parseInt(qtyText) || 1;
-            }
-          } catch {
-            // Default to 1
-          }
+          // The stepper's quantity is a bare text node between the minus and
+          // plus icon divs; both icons render as single glyph characters
+          // with no separator, so pull the text node directly.
+          const cartQuantity = await element.$eval(this.selectors.cartStepper, (el) => {
+            const textNode = Array.from(el.childNodes).find(n => n.nodeType === Node.TEXT_NODE);
+            return parseInt(textNode?.textContent?.trim() || '1', 10) || 1;
+          }).catch(() => 1);
 
           items.push({
-            id: Math.random().toString(36).substring(2, 9),
+            id: name,
             name,
             price,
             platform: this.name,
-            quantity: '1 unit',
+            quantity: variant,
             inStock: true,
             cartQuantity,
           });
-        } catch (err) {
-          // Skip item
+        } catch {
+          // Skip items that fail extraction
         }
       }
     } catch (error) {
@@ -425,15 +431,43 @@ export class BlinkitPlatform extends QuickCommercePlatform {
   }
 
   async removeFromCart(productId: string): Promise<boolean> {
-    // Would implement decrement quantity or remove
-    console.log('Remove from cart not yet fully implemented');
-    return false;
+    if (!this.page) throw new Error('Platform not initialized');
+
+    try {
+      await this.openCart();
+      // Decrement until the row disappears.
+      for (let i = 0; i < 50; i++) {
+        const row = this.page
+          .locator(this.selectors.cartItems)
+          .filter({ has: this.page.locator(this.selectors.cartItemName, { hasText: productId }) })
+          .first();
+        if ((await row.count()) === 0) return i > 0;
+        await row.locator(this.selectors.cartStepperMinus).click();
+        await this.page.waitForTimeout(1000);
+      }
+      return false;
+    } catch (error) {
+      console.error('Error removing from cart:', error);
+      return false;
+    }
   }
 
   async clearCart(): Promise<boolean> {
-    // Would iterate and remove all items
-    console.log('Clear cart not yet fully implemented');
-    return false;
+    if (!this.page) throw new Error('Platform not initialized');
+
+    try {
+      await this.openCart();
+      for (let i = 0; i < 100; i++) {
+        const minus = await this.page.$(`${this.selectors.cartItems} ${this.selectors.cartStepperMinus}`);
+        if (!minus) return true;
+        await minus.click();
+        await this.page.waitForTimeout(1000);
+      }
+      return false;
+    } catch (error) {
+      console.error('Error clearing cart:', error);
+      return false;
+    }
   }
 
   async getAddresses(): Promise<Address[]> {

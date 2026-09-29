@@ -38,6 +38,36 @@ function unitPrice(p: Product): { value: number; label: string } {
   return { value: p.price / amount, label: 'pc' };
 }
 
+// In-stock products whose name contains every query word.
+// ponytail: literal word match ("coke" won't match "Coca-Cola"); add synonyms if it bites.
+function relevant(query: string, products: Product[]): Product[] {
+  const words = query.toLowerCase().split(/\s+/).filter(w => w.length > 1).map(w => w.replace(/s$/, ''));
+  return products.filter(p => p.inStock && words.every(w => p.name.toLowerCase().includes(w)));
+}
+
+// Cheapest first by unit price, ranking only the most common unit so ₹/100 ml
+// isn't compared against ₹/pc.
+function rankByUnitPrice(products: Product[]): { p: Product; u: { value: number; label: string } }[] {
+  const priced = products.map(p => ({ p, u: unitPrice(p) }));
+  if (priced.length === 0) return [];
+  const counts = new Map<string, number>();
+  for (const { u } of priced) counts.set(u.label, (counts.get(u.label) || 0) + 1);
+  const unit = [...counts].sort((a, b) => b[1] - a[1])[0][0];
+  return priced.filter(x => x.u.label === unit).sort((a, b) => a.u.value - b.u.value);
+}
+
+// Logged-in search on one platform; errors are returned, not thrown.
+async function searchOn(platformName: string, query: string, pincode?: string): Promise<SearchResult | { platform: string; error: string }> {
+  try {
+    const platform = await getPlatform(platformName);
+    const login = await platform.checkLogin();
+    if (!login.loggedIn) return { platform: platformName, error: 'Not logged in' };
+    return await platform.search(query, pincode);
+  } catch (error: any) {
+    return { platform: platformName, error: error.message };
+  }
+}
+
 // Store active platform instances, each with its own browser context so
 // sessions (and any bot-detection fallout) stay isolated per platform.
 const platforms: Map<string, QuickCommercePlatform> = new Map();
@@ -316,17 +346,9 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           responseText += '\n';
         }
 
-        // Cross-platform comparison over each platform's top 5 (most relevant) results.
         const ok = results.filter((r): r is SearchResult => !('error' in r) && r.products.length > 0);
-        const priced = ok
-          .flatMap(r => r.products.slice(0, 5).filter(p => p.inStock))
-          .map(p => ({ p, u: unitPrice(p) }));
-        if (ok.length > 1 && priced.length > 0) {
-          // Only rank like against like (e.g. ₹/100 ml): use the most common unit.
-          const counts = new Map<string, number>();
-          for (const { u } of priced) counts.set(u.label, (counts.get(u.label) || 0) + 1);
-          const unit = [...counts].sort((a, b) => b[1] - a[1])[0][0];
-          const ranked = priced.filter(x => x.u.label === unit).sort((a, b) => a.u.value - b.u.value);
+        const ranked = rankByUnitPrice(ok.flatMap(r => relevant(query, r.products)));
+        if (ok.length > 1 && ranked.length > 0) {
           responseText += `💰 **Cheapest (by unit price)**\n`;
           for (const { p, u } of ranked.slice(0, 5)) {
             responseText += `- ₹${u.value.toFixed(2)}/${u.label} — ${p.name} (${p.quantity}) ₹${p.price} on ${p.platform}\n`;
@@ -480,16 +502,50 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       }
 
       case 'compare_prices': {
-        const { items } = args as any;
-        
-        // This would search all platforms and compare
+        const { items } = args as { items: { name: string; quantity: number; preferredBrand?: string }[] };
+
+        // ponytail: sequential, item prices only (delivery/handling fees vary
+        // with cart value and aren't known until checkout).
+        const basket = new Map<string, number>(ALL_PLATFORMS.map(n => [n, 0]));
+        const missing = new Map<string, string[]>(ALL_PLATFORMS.map(n => [n, []]));
+        let splitTotal = 0;
+        let text = `📊 **Price comparison** (item prices only, fees excluded)\n\n`;
+
+        for (const item of items) {
+          const query = item.preferredBrand ? `${item.preferredBrand} ${item.name}` : item.name;
+          const found: Product[] = [];
+          for (const platformName of ALL_PLATFORMS) {
+            const r = await searchOn(platformName, query);
+            if (!('error' in r)) found.push(...relevant(query, r.products));
+          }
+          const ranked = rankByUnitPrice(found);
+          text += `**${query}** ×${item.quantity}\n`;
+          for (const platformName of ALL_PLATFORMS) {
+            const best = ranked.find(x => x.p.platform === platformName);
+            if (!best) {
+              missing.get(platformName)!.push(query);
+              text += `- ${platformName}: not found\n`;
+              continue;
+            }
+            basket.set(platformName, basket.get(platformName)! + best.p.price * item.quantity);
+            text += `- ${platformName}: ${best.p.name} (${best.p.quantity}) ₹${best.p.price} — ₹${best.u.value.toFixed(2)}/${best.u.label} — ID \`${best.p.id}\`\n`;
+          }
+          if (ranked[0]) {
+            splitTotal += ranked[0].p.price * item.quantity;
+            text += `  ✅ Cheapest: ${ranked[0].p.platform}\n`;
+          }
+          text += '\n';
+        }
+
+        text += `🧺 **Whole basket on one platform**\n`;
+        for (const platformName of ALL_PLATFORMS) {
+          const miss = missing.get(platformName)!;
+          text += `- ${platformName}: ₹${basket.get(platformName)}${miss.length ? ` (missing: ${miss.join(', ')})` : ''}\n`;
+        }
+        text += `\n🔀 **Cheapest split across platforms**: ₹${splitTotal}\n`;
+
         return {
-          content: [
-            {
-              type: 'text',
-              text: `📊 Price comparison for ${items.length} items coming soon!\n\nThis feature searches all platforms simultaneously and finds the optimal combination for lowest total cost.`,
-            },
-          ],
+          content: [{ type: 'text', text }],
         };
       }
 

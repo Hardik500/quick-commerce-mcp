@@ -28,6 +28,8 @@ export declare class ZeptoPlatform extends QuickCommercePlatform {
     private extractCardQuantity;
     private extractQuantity;
     addToCart(productId: string, quantity: number): Promise<boolean>;
+    private openCart;
+    private lastPrice;
     getCart(): Promise<CartSummary | null>;
     private extractCartItems;
     removeFromCart(productId: string): Promise<boolean>;

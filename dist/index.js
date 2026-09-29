@@ -31,7 +31,7 @@ const TOOLS = [
                 },
                 platforms: {
                     type: 'array',
-                    items: { type: 'string', enum: ['zepto', 'swiggy', 'swiggy-instamart', 'bigbasket', 'all'] },
+                    items: { type: 'string', enum: ['zepto', 'swiggy', 'swiggy-instamart', 'blinkit', 'bigbasket', 'all'] },
                     description: 'Platforms to search on. Use "all" to search all supported platforms.',
                 },
                 pincode: {
@@ -50,7 +50,7 @@ const TOOLS = [
             properties: {
                 platforms: {
                     type: 'array',
-                    items: { type: 'string', enum: ['zepto', 'swiggy', 'swiggy-instamart', 'bigbasket', 'all'] },
+                    items: { type: 'string', enum: ['zepto', 'swiggy', 'swiggy-instamart', 'blinkit', 'bigbasket', 'all'] },
                     description: 'Platforms to check login status',
                 },
             },

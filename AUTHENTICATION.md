@@ -57,8 +57,8 @@ const browser = await chromium.connect('wss://cloud.browserless.io?token=YOUR_TO
 | Platform | Status | Notes |
 |----------|--------|-------|
 | Zepto | ✅ Working | Login, `search_products`, and `add_to_cart` verified end-to-end via a real MCP client against a saved session |
+| Blinkit | ✅ Working | Login, `search_products`, and `add_to_cart` verified against a saved session (`scripts/test-search.ts`, `scripts/test-blinkit-addtocart.ts`) |
 | Swiggy Instamart | 🔧 Speculative | Login/save-session flow wired up (`submitOtp` saves session), but selectors are unverified — no authenticated session captured yet |
-| Blinkit | 🔧 Speculative | Same as Swiggy Instamart — selectors unverified, `search()` fails with "Search input not found" against the live site |
 
 ## How to Use
 
@@ -81,7 +81,8 @@ const browser = await chromium.connect('wss://cloud.browserless.io?token=YOUR_TO
 
 - `src/session-helper.ts` - Interactive login helper; exposes `sessionPath(platform)` and saves `storageState()` on `SIGINT`/`SIGTERM`
 - `src/engine/stealth-browser.ts` - Wraps Playwright + `playwright-stealth`; accepts `storageStatePath` to restore a saved session on launch
-- `src/platforms/zepto.ts` - Real, verified selectors (search, product cards, add-to-cart)
+- `src/platforms/zepto.ts` / `src/platforms/blinkit.ts` - Real, verified selectors (search, product cards, add-to-cart)
+- `scripts/auto-login-blinkit.ts` - Alternative to `session-helper.ts` for Blinkit: auto-fills phone number and clicks through to the OTP screen, so only the OTP itself needs typing into the browser (`INSPECT_PHONE=<10-digit number> npx tsx scripts/auto-login-blinkit.ts`)
 - `~/.quick-commerce-mcp/sessions/` - Saved browser sessions, one JSON file per platform (outside the repo, so it survives regardless of where/how the server is installed, e.g. via `npx`)
 
 ## Debugging Selectors

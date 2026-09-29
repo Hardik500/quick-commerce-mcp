@@ -1,27 +1,38 @@
 import { QuickCommercePlatform, } from './base.js';
 import { sessionPath, ensureSessionDir } from '../session-helper.js';
 export class BlinkitPlatform extends QuickCommercePlatform {
+    // Verified against the live site with an authenticated session
+    // (scripts/inspect-blinkit-authed.ts) on 2026-09-29. Blinkit's product
+    // grid uses Tailwind utility classes (no semantic names/data-testids), so
+    // selectors key off distinctive class combinations instead.
     selectors = {
-        // Blinkit specific selectors
-        searchInput: 'input[placeholder*="Search"], input[data-testid="search-input"], input[type="search"]',
-        searchResults: '[data-testid="product-card"], div[class*="ProductCard"], div[class*="product-card"]',
-        productName: '[data-testid="product-name"], h3, h4, div[class*="ProductName"], span[class*="name"]',
-        productPrice: '[data-testid="price"], div[class*="Price"], span[class*="price-current"]',
-        productMRP: '[data-testid="mrp"], div[class*="MRP"], span[class*="price-original"]',
-        discount: '[data-testid="discount"], span[class*="discount"], span[class*="Discount"]',
-        addToCartButton: 'button:has-text("ADD"), button[class*="add"], [data-testid="add-button"]',
-        quantityIncrement: 'button:has-text("+"), [data-testid="increment"], [aria-label*="increase"]',
-        quantityDecrement: 'button:has-text("-"), [data-testid="decrement"], [aria-label*="decrease"]',
+        // The homepage search bar is a link (rotating placeholder text) that
+        // navigates to /s/, which has the real <input>. Direct navigation to
+        // /s/?q=<query> is used instead of clicking through it (see search()).
+        searchInput: 'input[placeholder*="Search" i]',
+        // Product cards are <div role="button"> whose `id` is the numeric
+        // product ID - no stable class/data-testid identifies them, so callers
+        // must filter `div[id]` matches to numeric ids (see extractProductResults).
+        searchResults: 'div[id]',
+        productName: '.tw-text-300.tw-font-semibold.tw-line-clamp-2',
+        productQuantity: '.tw-text-200.tw-font-medium.tw-line-clamp-1',
+        productPrice: '.tw-text-200.tw-font-semibold',
+        productMRP: '.tw-text-200.tw-font-regular.tw-line-through',
+        deliveryTime: '.tw-text-050.tw-font-bold.tw-uppercase',
+        addToCartButton: '.tw-bg-green-050',
+        incrementButton: 'button:has(.icon-plus)',
+        decrementButton: 'button:has(.icon-minus)',
         cartIcon: 'button:has-text("Cart"), a[href*="cart"], [data-testid="cart"]',
         cartItems: '[data-testid="cart-item"], div[class*="CartItem"], div[class*="cart-item"]',
-        productImage: 'img[class*="product-image"], div[class*="ProductImage"] img',
         availability: '[data-testid="out-of-stock"], span[class*="out-of-stock"], div[class*="unavailable"]',
-        deliveryTime: '[data-testid="delivery-time"], span[class*="delivery"], div[class*="time"]',
-        loginButton: 'button:has-text("Login"), button:has-text("Sign in"), a:has-text("Login")',
-        phoneInput: 'input[type="tel"], input[placeholder*="phone"], input[name="mobile"]',
-        otpInput: 'input[placeholder*="OTP"], input[type="number"][maxlength="6"]',
-        addressDropdown: 'div[class*="address-selector"], button[class*="address"]',
-        addressItem: '[data-testid="address-item"], div[class*="SavedAddress"]',
+        // Login modal, triggered by clicking the profile icon.
+        profileIcon: '[class*="profile" i]',
+        phoneInput: 'input[data-test-id="phone-no-text-box"]',
+        continueButton: 'button:has-text("Continue")',
+        otpInput: '[data-test-id="otp-text-box"]',
+        // App-install / location interstitials shown on a fresh page load.
+        continueOnWebLink: 'text=Continue on web',
+        useLocationButton: 'text=Use my location',
     };
     constructor() {
         super('blinkit', 'https://blinkit.com');
@@ -32,27 +43,28 @@ export class BlinkitPlatform extends QuickCommercePlatform {
         // Blinkit works well with mobile viewport
         await this.page.setViewportSize({ width: 390, height: 844 });
         // Navigate to homepage
-        await this.page.goto(this.baseUrl, { waitUntil: 'networkidle' });
+        await this.page.goto(this.baseUrl, { waitUntil: 'domcontentloaded', timeout: 30000 });
         // Wait for page to stabilize
         await this.page.waitForTimeout(2000);
-        // Handle any initial popups (location, notifications)
+        // Handle any initial popups (app-install interstitial, location prompt)
         await this.handleInitialPopups();
     }
     async handleInitialPopups() {
         if (!this.page)
             return;
         try {
-            // Handle location permission popup
-            const allowLocationBtn = await this.page.$('button:has-text("Allow")');
-            if (allowLocationBtn) {
-                await allowLocationBtn.click();
-                await this.page.waitForTimeout(1000);
+            // "Get the app" interstitial shown on every fresh page load.
+            const continueOnWeb = await this.page.$(this.selectors.continueOnWebLink);
+            if (continueOnWeb) {
+                await continueOnWeb.click();
+                await this.page.waitForTimeout(1500);
             }
-            // Handle notification popup
-            const notNowBtn = await this.page.$('button:has-text("Not now"), button:has-text("Block")');
-            if (notNowBtn) {
-                await notNowBtn.click();
-                await this.page.waitForTimeout(500);
+            // "Select your location" modal - only appears if the session has no
+            // saved location yet (a fresh/expired login).
+            const useLocationBtn = await this.page.$(this.selectors.useLocationButton);
+            if (useLocationBtn) {
+                await useLocationBtn.click();
+                await this.page.waitForTimeout(2000);
             }
         }
         catch {
@@ -63,32 +75,21 @@ export class BlinkitPlatform extends QuickCommercePlatform {
         if (!this.page)
             throw new Error('Platform not initialized');
         try {
-            // Check for profile/account button (indicates logged in)
-            const profileButton = await this.page.$('button[class*="profile"], div[class*="Profile"], [data-testid="profile"]');
-            const loginButton = await this.page.$(this.selectors.loginButton);
-            if (profileButton && !loginButton) {
-                this.isLoggedIn = true;
-                return { loggedIn: true };
-            }
-            // Check cookies
+            // gr_1_accessToken is Blinkit's auth cookie (gr_1 = legacy Grofers
+            // brand prefix) - present only once phone+OTP login succeeds.
             const cookies = await this.context.cookies();
-            const authCookie = cookies.find(c => c.name.includes('auth') ||
-                c.name.includes('token') ||
-                c.name.includes('session') ||
-                c.name.includes('blinkit'));
-            if (authCookie && authCookie.expires && authCookie.expires > Date.now() / 1000) {
+            const authCookie = cookies.find(c => c.name === 'gr_1_accessToken');
+            if (authCookie && authCookie.value) {
                 this.isLoggedIn = true;
                 return { loggedIn: true };
             }
-            // Check if there's an OTP input visible (indicates OTP sent)
+            // If a login flow was already triggered (e.g. by a prior submitOtp
+            // attempt) and the OTP screen is showing, report that back so the
+            // caller can prompt for the code instead of just "not logged in".
             const otpInput = await this.page.$(this.selectors.otpInput);
             if (otpInput) {
                 this.isLoggedIn = false;
-                return {
-                    loggedIn: false,
-                    otpSent: true,
-                    phone: await this.extractPhoneNumber()
-                };
+                return { loggedIn: false, otpSent: true };
             }
             this.isLoggedIn = false;
             return { loggedIn: false };
@@ -97,22 +98,6 @@ export class BlinkitPlatform extends QuickCommercePlatform {
             console.error('Error checking login status:', error);
             return { loggedIn: false };
         }
-    }
-    async extractPhoneNumber() {
-        if (!this.page)
-            return undefined;
-        try {
-            // Try to find phone number displayed on page
-            const phoneElement = await this.page.$('span[class*="phone"], div[class*="phone-number"]');
-            if (phoneElement) {
-                const phone = await phoneElement.textContent();
-                return phone?.replace(/\D/g, '').slice(-10); // Last 10 digits
-            }
-        }
-        catch {
-            // Ignore
-        }
-        return undefined;
     }
     async submitOtp(otp) {
         if (!this.page)
@@ -123,19 +108,11 @@ export class BlinkitPlatform extends QuickCommercePlatform {
                 console.log('OTP input not found');
                 return false;
             }
-            await otpInput.fill(otp);
-            // Submit OTP (usually auto-submits or has a button)
-            await this.page.waitForTimeout(500);
-            // Try clicking verify button if present
-            const verifyButton = await this.page.$('button:has-text("Verify"), button:has-text("Submit"), button[type="submit"]');
-            if (verifyButton) {
-                await verifyButton.click();
-                await this.page.waitForTimeout(3000);
-            }
-            else {
-                // Wait for auto-submit
-                await this.page.waitForTimeout(3000);
-            }
+            // OTP is 4 separate single-digit boxes; typing into the first one
+            // auto-advances focus through the rest (see scripts/auto-login-blinkit.ts).
+            await otpInput.click();
+            await this.page.keyboard.type(otp);
+            await this.page.waitForTimeout(3000);
             const loginCheck = await this.checkLogin();
             if (loginCheck.loggedIn) {
                 await this.saveSession();
@@ -159,28 +136,18 @@ export class BlinkitPlatform extends QuickCommercePlatform {
     async search(query, location) {
         if (!this.page)
             throw new Error('Platform not initialized');
+        if (!this.isLoggedIn) {
+            throw new Error('Not logged in. Please login first.');
+        }
         try {
-            // Set location if provided
-            if (location) {
-                await this.setLocation(location);
-            }
-            // Find and use search input
-            const searchInput = await this.page.$(this.selectors.searchInput);
-            if (!searchInput) {
-                throw new Error('Search input not found');
-            }
-            await searchInput.click();
-            await searchInput.fill(query);
-            await this.page.keyboard.press('Enter');
-            // Wait for results
+            // Delivery location comes from the saved session (set during login);
+            // the /s/?q= search page doesn't take a location override, so the
+            // `location` param is accepted for interface parity but unused here.
+            await this.page.goto(`${this.baseUrl}/s/?q=${encodeURIComponent(query)}`, {
+                waitUntil: 'domcontentloaded',
+                timeout: 30000,
+            });
             await this.page.waitForTimeout(3000);
-            // Wait for product cards to appear
-            try {
-                await this.page.waitForSelector(this.selectors.searchResults, { timeout: 5000 });
-            }
-            catch {
-                console.log('Search results not found, trying to extract anyway');
-            }
             const products = await this.extractProductResults();
             return {
                 query,
@@ -199,40 +166,21 @@ export class BlinkitPlatform extends QuickCommercePlatform {
             };
         }
     }
-    async setLocation(pincodeOrArea) {
-        if (!this.page)
-            return;
-        try {
-            // Check if location selector is accessible
-            const locationBtn = await this.page.$(this.selectors.addressDropdown);
-            if (locationBtn) {
-                await locationBtn.click();
-                await this.page.waitForTimeout(1000);
-                // Search for location
-                const searchInput = await this.page.$('input[placeholder*="Search location"], input[placeholder*="area"]');
-                if (searchInput) {
-                    await searchInput.fill(pincodeOrArea);
-                    await this.page.keyboard.press('Enter');
-                    await this.page.waitForTimeout(2000);
-                    // Select first result
-                    const firstResult = await this.page.$('div[class*="suggestion"], li[class*="result"]:first-child');
-                    if (firstResult) {
-                        await firstResult.click();
-                        await this.page.waitForTimeout(2000);
-                    }
-                }
-            }
-        }
-        catch (error) {
-            console.error('Error setting location:', error);
-        }
-    }
     async extractProductResults() {
         if (!this.page)
             return [];
         const products = [];
         try {
-            const productElements = await this.page.$$(this.selectors.searchResults);
+            // Cards are <div id="<numeric product id>"> with no other stable
+            // selector, so `searchResults` matches every div[id] on the page and
+            // needs a numeric-id filter here to isolate the actual cards.
+            const allDivsWithId = await this.page.$$(this.selectors.searchResults);
+            const productElements = [];
+            for (const el of allDivsWithId) {
+                const id = await el.evaluate(node => node.id);
+                if (/^\d+$/.test(id))
+                    productElements.push(el);
+            }
             for (const element of productElements.slice(0, 20)) {
                 try {
                     // Extract product details
@@ -249,14 +197,6 @@ export class BlinkitPlatform extends QuickCommercePlatform {
                     }
                     catch {
                         mrp = undefined;
-                    }
-                    // Check for discount
-                    let discount;
-                    try {
-                        discount = await element.$eval(this.selectors.discount, el => el.textContent?.trim() || undefined);
-                    }
-                    catch {
-                        discount = undefined;
                     }
                     // Check availability
                     let inStock = true;
@@ -277,20 +217,24 @@ export class BlinkitPlatform extends QuickCommercePlatform {
                     catch {
                         deliveryTime = undefined;
                     }
-                    // Extract unique ID
-                    const productId = await element.evaluate(el => {
-                        return el.getAttribute('data-product-id') ||
-                            el.getAttribute('data-variant-id') ||
-                            el.getAttribute('id') ||
-                            Math.random().toString(36).substring(2, 9);
-                    });
+                    // Quantity/size (e.g. "450 ml") is shown separately from the name.
+                    let quantity = '1 unit';
+                    try {
+                        const qtyText = await element.$eval(this.selectors.productQuantity, el => el.textContent?.trim());
+                        if (qtyText)
+                            quantity = qtyText;
+                    }
+                    catch {
+                        // Fall back to parsing it out of the name below
+                        quantity = this.extractQuantity(name);
+                    }
+                    const productId = await element.evaluate(el => el.id);
                     products.push({
                         id: productId,
                         name: name || 'Unknown Product',
                         price,
                         mrp,
-                        discount,
-                        quantity: this.extractQuantity(name),
+                        quantity,
                         deliveryTime,
                         platform: this.name,
                         inStock,
@@ -321,8 +265,8 @@ export class BlinkitPlatform extends QuickCommercePlatform {
         if (!this.page)
             throw new Error('Platform not initialized');
         try {
-            // Find product element
-            const product = await this.page.$(`[data-product-id="${productId}"], [id="${productId}"]`);
+            // The product's numeric id is the card's DOM id directly.
+            const product = await this.page.$(`div[id="${productId}"]`);
             if (!product) {
                 console.log('Product not found:', productId);
                 return false;
@@ -335,10 +279,11 @@ export class BlinkitPlatform extends QuickCommercePlatform {
             }
             await addButton.click();
             await this.page.waitForTimeout(1000);
-            // Handle quantity increment if quantity > 1
+            // Handle quantity increment if quantity > 1 (ADD button turns into a
+            // -/qty/+ stepper after the first click).
             if (quantity > 1) {
                 for (let i = 1; i < quantity; i++) {
-                    const incrementBtn = await product.$(this.selectors.quantityIncrement);
+                    const incrementBtn = await product.$(this.selectors.incrementButton);
                     if (incrementBtn) {
                         await incrementBtn.click();
                         await this.page.waitForTimeout(500);

@@ -10,20 +10,23 @@ import { BlinkitPlatform } from '../src/platforms/blinkit.js';
 async function testSearch() {
   console.log('🚀 Starting live search test for "6 pack Coke Zero"\n');
 
-  // Launch browser, restoring any saved authenticated session per platform.
-  const stealth = new StealthBrowser();
-  const context = await stealth.launch({
-    headless: true, // Set false to see browser
-    slowMo: 50,
-    storageStatePath: sessionPath('zepto'),
-  });
+  // Each platform gets its own browser context (and storageState), matching
+  // how index.ts isolates sessions per platform - sharing one context would
+  // only ever restore the first platform's session file.
+  const zeptoBrowser = new StealthBrowser();
+  const blinkitBrowser = new StealthBrowser();
 
   try {
     // Test Zepto
     console.log('📱 Testing ZEPTO...');
+    const zeptoContext = await zeptoBrowser.launch({
+      headless: true, // Set false to see browser
+      slowMo: 50,
+      storageStatePath: sessionPath('zepto'),
+    });
     const zepto = new ZeptoPlatform();
-    await zepto.initialize(context);
-    
+    await zepto.initialize(zeptoContext);
+
     // Check login
     const zeptoLogin = await zepto.checkLogin();
     console.log('   Login status:', zeptoLogin.loggedIn ? '✅ Logged in' : '❌ Not logged in');
@@ -43,9 +46,14 @@ async function testSearch() {
 
     // Test Blinkit
     console.log('📱 Testing BLINKIT...');
+    const blinkitContext = await blinkitBrowser.launch({
+      headless: true,
+      slowMo: 50,
+      storageStatePath: sessionPath('blinkit'),
+    });
     const blinkit = new BlinkitPlatform();
-    await blinkit.initialize(context);
-    
+    await blinkit.initialize(blinkitContext);
+
     const blinkitLogin = await blinkit.checkLogin();
     console.log('   Login status:', blinkitLogin.loggedIn ? '✅ Logged in' : '❌ Not logged in');
 
@@ -72,8 +80,9 @@ async function testSearch() {
   } catch (error) {
     console.error('❌ Test error:', error);
   } finally {
-    await stealth.close();
-    console.log('\n🏁 Browser closed.');
+    await zeptoBrowser.close();
+    await blinkitBrowser.close();
+    console.log('\n🏁 Browsers closed.');
   }
 }
 

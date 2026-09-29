@@ -58,7 +58,7 @@ const browser = await chromium.connect('wss://cloud.browserless.io?token=YOUR_TO
 |----------|--------|-------|
 | Zepto | ✅ Working | Login, `search_products`, and `add_to_cart` verified end-to-end via a real MCP client against a saved session |
 | Blinkit | ✅ Working | Login, `search_products`, and `add_to_cart` verified against a saved session (`scripts/test-search.ts`, `scripts/test-blinkit-addtocart.ts`) |
-| Swiggy Instamart | 🔧 Speculative | Login/save-session flow wired up (`submitOtp` saves session), but selectors are unverified — no authenticated session captured yet |
+| Swiggy Instamart | ✅ Working | Login, `search_products`, `add_to_cart`, `get_cart`, and `clear_cart` verified against a saved session (`scripts/test-instamart-addtocart.ts`) |
 
 ## How to Use
 

@@ -18,13 +18,13 @@ export declare class SwiggyInstamartPlatform extends QuickCommercePlatform {
     /** Persist cookies + localStorage so the next run starts already logged in. */
     saveSession(): Promise<void>;
     search(query: string, location?: string): Promise<SearchResult>;
-    private setDeliveryLocation;
     private extractProductResults;
     private parsePrice;
     private extractQuantity;
     addToCart(productId: string, quantity: number): Promise<boolean>;
     getCart(): Promise<CartSummary | null>;
     private extractCartItems;
+    private openCart;
     removeFromCart(productId: string): Promise<boolean>;
     clearCart(): Promise<boolean>;
     getAddresses(): Promise<Address[]>;

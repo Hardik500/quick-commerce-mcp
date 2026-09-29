@@ -37,7 +37,7 @@ npm run build
 |----------|--------|------|-------|-------|
 | Zepto | ✅ | ✅ | 🚧 | Login + search + add-to-cart verified end-to-end |
 | Blinkit | ✅ | ✅ | 🚧 | Login + search + add-to-cart verified end-to-end |
-| Swiggy Instamart | 🚧 | 🚧 | 🚧 | Login flow wired up; selectors unverified (no session captured yet) |
+| Swiggy Instamart | ✅ | ✅ | 🚧 | Login + search + add-to-cart + get/clear cart verified end-to-end |
 | BigBasket | 🚧 | 🚧 | 🚧 | Coming in v1.1 |
 
 See [AUTHENTICATION.md](AUTHENTICATION.md) for how to log in to a platform and save a session.
@@ -89,7 +89,7 @@ See [AUTHENTICATION.md](AUTHENTICATION.md) for how to log in to a platform and s
 ### v1.0 (Current)
 - [x] Zepto automation (login, search, add-to-cart)
 - [x] Blinkit automation (login, search, add-to-cart)
-- [ ] Swiggy Instamart (selectors unverified)
+- [x] Swiggy Instamart automation (login, search, add-to-cart, cart)
 - [ ] Price comparison
 - [ ] Basic cart management
 

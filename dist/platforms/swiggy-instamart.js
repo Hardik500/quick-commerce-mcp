@@ -1,21 +1,37 @@
 import { QuickCommercePlatform, } from './base.js';
 import { sessionPath, ensureSessionDir } from '../session-helper.js';
 export class SwiggyInstamartPlatform extends QuickCommercePlatform {
+    // Verified against the live site with an authenticated session
+    // (scripts/test-instamart-addtocart.ts) on 2026-09-29. data-testids are used where
+    // they exist; card text fields only have hashed CSS-module classes.
     selectors = {
-        // Swiggy Instamart specific selectors - these need testing
-        searchInput: 'input[data-testid="autosuggest-input"], input[placeholder*="Search"], input[class*="search"]',
-        searchResults: '[data-testid="item-card"], div[class*="item-card"], [class*="InstamartItemCard"]',
-        productName: '[data-testid="item-name"], span[class*="itemName"], div[class*="itemName"]',
-        productPrice: '[data-testid="item-price"], div[class*="price"], span[class*="price"]',
-        productMRP: '[data-testid="item-mrp"], div[class*="mrp"], span[class*="strikethrough"]',
-        addToCartButton: 'button[class*="addBtn"], button:has-text("ADD"), [data-testid="add-button"]',
-        quantitySelector: 'button[class*="increment"], button:has-text("+"), [data-testid="increment"]',
-        cartIcon: 'button:has-text("Cart"), a:has-text("Cart"), [data-testid="cart-button"]',
-        cartItems: '[data-testid="cart-item"], div[class*="cart-item"]',
-        loginPhoneInput: 'input[type="tel"], input[name="mobile"], input[placeholder*="Phone"]',
-        otpInput: 'input[type="number"], input[name="otp"], input[placeholder*="OTP"]',
-        addressSelector: '[data-testid="address"], div[class*="address"]',
-        deliveryTime: 'span[class*="deliveryTime"], div[class*="deliveryTime"]',
+        // Card root; name/price/qty live in its parent (price row is a sibling).
+        searchResults: '[data-testid="item-collection-card-full"]',
+        productName: '._1lbNR',
+        // The MRP element also carries _2jn41, so exclude it.
+        productPrice: '._2jn41:not(._3eAjW)',
+        productMRP: '._3eAjW',
+        productQuantity: '._3wq_F',
+        deliveryTime: '._1y_Uf',
+        // Becomes the "+" button once the item is in the cart.
+        addToCartButton: '[data-testid="buttonpair-add"]',
+        // Multi-variant items open this sheet instead of adding directly.
+        variantSheet: '[data-testid="InstamartItemCustomizationWidget"]',
+        variantRow: '[data-testid="variants-container"]',
+        variantPrice: '[data-testid="variants-price"]',
+        variantSheetClose: '[data-testid="InstamartItemCustomizationWidget-cta"]',
+        // Stepper used in the variant sheet and on the cart page.
+        stepperAdd: '[data-testid="add_buttons_center"]',
+        stepperPlus: '[data-testid="add_buttons_plus"]',
+        stepperMinus: '[data-testid="add_buttons_minus"]',
+        cartItems: '[data-testid="item-list-available-items-container"] [role="listitem"]',
+        cartItemName: '[data-testid="cart-item-name"]',
+        cartItemQuantity: '[data-testid="cart-item-quantity"]',
+        cartItemCount: '[data-testid="add_buttons_center"]',
+        cartItemPrice: '[data-testid="cart-item-price"]',
+        otpInput: 'input#otp',
+        // Location modal shown when the session has no saved address.
+        setGpsButton: '[data-testid="set-gps-button"]',
     };
     constructor() {
         super('swiggy-instamart', 'https://www.swiggy.com/instamart');
@@ -23,24 +39,20 @@ export class SwiggyInstamartPlatform extends QuickCommercePlatform {
     async initialize(context) {
         this.context = context;
         this.page = await context.newPage();
-        // Set viewport to wide enough for Instamart
-        await this.page.setViewportSize({ width: 1280, height: 800 });
-        // Navigate to Instamart
-        await this.page.goto(this.baseUrl, { waitUntil: 'networkidle' });
-        // Wait for page to load
+        // Swiggy's mobile site shows "Rotate your device" in landscape viewports.
+        await this.page.setViewportSize({ width: 390, height: 844 });
+        await this.page.goto(this.baseUrl, { waitUntil: 'domcontentloaded', timeout: 30000 });
         await this.page.waitForTimeout(3000);
-        // Handle location popup if it appears
         await this.handleLocationPopup();
     }
     async handleLocationPopup() {
         if (!this.page)
             return;
         try {
-            // Swiggy often shows a delivery location popup
-            const detectLocationBtn = await this.page.$('button:has-text("Detect my location"), button[class*="detect-location"]');
-            if (detectLocationBtn) {
-                // Don't click auto-detect, let user handle location or use saved addresses
-                console.log('Location popup detected - user will need to set location');
+            const gps = await this.page.$(this.selectors.setGpsButton);
+            if (gps) {
+                await gps.click();
+                await this.page.waitForTimeout(2000);
             }
         }
         catch {
@@ -51,21 +63,18 @@ export class SwiggyInstamartPlatform extends QuickCommercePlatform {
         if (!this.page)
             throw new Error('Platform not initialized');
         try {
-            // Check for logged in state - usually there's an account icon
-            const accountBtn = await this.page.$('button:has-text("Account"), div[class*="account"], [data-testid="account"]');
-            const loginBtn = await this.page.$('button:has-text("Log in"), button:has-text("LOGIN")');
-            if (accountBtn && !loginBtn) {
+            // _session_tid is set only after OTP login and persists for a year
+            // (_is_logged_in is a session cookie, so it's dropped between runs).
+            const cookies = await this.context.cookies();
+            const authCookie = cookies.find(c => c.name === '_session_tid');
+            if (authCookie && authCookie.value) {
                 this.isLoggedIn = true;
                 return { loggedIn: true };
             }
-            // Check session storage/cookies
-            const cookies = await this.context.cookies();
-            const swiggySession = cookies.find(c => c.name.includes('session') ||
-                c.name.includes('token') ||
-                c.name.includes('swiggy'));
-            if (swiggySession && swiggySession.expires && swiggySession.expires > Date.now() / 1000) {
-                this.isLoggedIn = true;
-                return { loggedIn: true };
+            const otpInput = await this.page.$(this.selectors.otpInput);
+            if (otpInput) {
+                this.isLoggedIn = false;
+                return { loggedIn: false, otpSent: true };
             }
             this.isLoggedIn = false;
             return { loggedIn: false };
@@ -84,13 +93,14 @@ export class SwiggyInstamartPlatform extends QuickCommercePlatform {
                 console.log('OTP input not found');
                 return false;
             }
-            await otpInput.fill(otp);
-            // Find verify/submit button
-            const verifyBtn = await this.page.$('button:has-text("Verify"), button:has-text("SUBMIT"), button[class*="verify"]');
-            if (verifyBtn) {
-                await verifyBtn.click();
-                await this.page.waitForTimeout(3000);
-            }
+            // Controlled React input: fill() doesn't register, real keystrokes do.
+            await otpInput.click();
+            await this.page.keyboard.type(otp, { delay: 80 });
+            await this.page.waitForTimeout(1500);
+            const verifyBtn = await this.page.$('button:has-text("VERIFY"), button:has-text("CONTINUE")');
+            if (verifyBtn)
+                await verifyBtn.click().catch(() => { });
+            await this.page.waitForTimeout(5000);
             // Check if login succeeded
             const loginCheck = await this.checkLogin();
             if (loginCheck.loggedIn) {
@@ -115,27 +125,19 @@ export class SwiggyInstamartPlatform extends QuickCommercePlatform {
     async search(query, location) {
         if (!this.page)
             throw new Error('Platform not initialized');
+        if (!this.isLoggedIn) {
+            throw new Error('Not logged in. Please login first.');
+        }
         try {
-            // Ensure delivery location is set first
-            if (location) {
-                await this.setDeliveryLocation(location);
-            }
-            // Click on search input
-            const searchInput = await this.page.$(this.selectors.searchInput);
-            if (!searchInput) {
-                throw new Error('Search input not found');
-            }
-            await searchInput.click();
-            await searchInput.fill(query);
-            await this.page.keyboard.press('Enter');
-            // Wait for search results
-            await this.page.waitForTimeout(3000);
-            // Wait for results to appear
+            // Delivery location comes from the saved session; `location` is
+            // accepted for interface parity but unused here.
+            await this.page.goto(`${this.baseUrl}/search?custom_back=true&query=${encodeURIComponent(query)}`, { waitUntil: 'domcontentloaded', timeout: 30000 });
             try {
-                await this.page.waitForSelector(this.selectors.searchResults, { timeout: 10000 });
+                await this.page.waitForSelector(this.selectors.searchResults, { timeout: 15000 });
+                await this.page.waitForTimeout(1500);
             }
             catch {
-                console.log('Search results selector not found, trying fallback');
+                console.log('No search results found');
             }
             const products = await this.extractProductResults();
             return {
@@ -155,28 +157,6 @@ export class SwiggyInstamartPlatform extends QuickCommercePlatform {
             };
         }
     }
-    async setDeliveryLocation(pincode) {
-        if (!this.page)
-            return;
-        try {
-            // Check if we need to set location
-            const locationBtn = await this.page.$('div[class*="location"], button[class*="location"]');
-            if (locationBtn) {
-                await locationBtn.click();
-                await this.page.waitForTimeout(1000);
-                // Look for search by pincode
-                const pincodeInput = await this.page.$('input[placeholder*="Enter pincode"], input[placeholder*="Search"]');
-                if (pincodeInput) {
-                    await pincodeInput.fill(pincode);
-                    await this.page.keyboard.press('Enter');
-                    await this.page.waitForTimeout(2000);
-                }
-            }
-        }
-        catch (error) {
-            console.error('Error setting location:', error);
-        }
-    }
     async extractProductResults() {
         if (!this.page)
             return [];
@@ -185,39 +165,20 @@ export class SwiggyInstamartPlatform extends QuickCommercePlatform {
             const productElements = await this.page.$$(this.selectors.searchResults);
             for (const element of productElements.slice(0, 20)) {
                 try {
-                    const name = await element.$eval(this.selectors.productName, el => el.textContent?.trim() || '');
-                    const priceText = await element.$eval(this.selectors.productPrice, el => el.textContent?.trim() || '');
-                    const price = this.parsePrice(priceText);
-                    // Try to get MRP (strikethrough price)
-                    let mrp;
-                    try {
-                        const mrpText = await element.$eval(this.selectors.productMRP, el => el.textContent?.trim());
-                        mrp = this.parsePrice(mrpText || '');
-                    }
-                    catch {
-                        mrp = undefined;
-                    }
-                    // Try to get delivery time estimate
-                    let deliveryTime;
-                    try {
-                        deliveryTime = await element.$eval(this.selectors.deliveryTime, el => el.textContent?.trim());
-                    }
-                    catch {
-                        deliveryTime = undefined;
-                    }
-                    const productId = await element.evaluate(el => {
-                        return el.getAttribute('data-item-id') ||
-                            el.getAttribute('data-testid') ||
-                            el.getAttribute('id') ||
-                            Math.random().toString(36).substring(7);
-                    });
+                    const s = this.selectors;
+                    // No named helper functions inside evaluate(): tsx injects a
+                    // `__name` wrapper that doesn't exist in the browser.
+                    const [name, price, mrp, quantity, deliveryTime] = await element.evaluate((card, sels) => sels.map(q => card.parentElement.querySelector(q)?.textContent?.trim() || ''), [s.productName, s.productPrice, s.productMRP, s.productQuantity, s.deliveryTime]);
+                    const data = { name, price, mrp, quantity, deliveryTime };
+                    // ponytail: cards expose no product id, so the name is the id; addToCart
+                    // looks the card up by name on the current results page.
                     products.push({
-                        id: productId,
-                        name: name || 'Unknown Product',
-                        price,
-                        mrp,
-                        quantity: this.extractQuantity(name),
-                        deliveryTime,
+                        id: data.name,
+                        name: data.name || 'Unknown Product',
+                        price: this.parsePrice(data.price),
+                        mrp: data.mrp ? this.parsePrice(data.mrp) : undefined,
+                        quantity: data.quantity || this.extractQuantity(data.name),
+                        deliveryTime: data.deliveryTime || undefined,
                         platform: this.name,
                         inStock: true,
                     });
@@ -244,27 +205,46 @@ export class SwiggyInstamartPlatform extends QuickCommercePlatform {
         if (!this.page)
             throw new Error('Platform not initialized');
         try {
-            // Find product
-            const product = await this.page.$(`[data-item-id="${productId}"], [id="${productId}"]`);
-            if (!product) {
+            // productId is the product name (see extractProductResults).
+            const card = this.page
+                .locator(this.selectors.searchResults)
+                .filter({ has: this.page.locator(`img[alt="${productId.replace(/"/g, '\\"')}"]`) })
+                .first();
+            if ((await card.count()) === 0) {
                 console.log('Product not found:', productId);
                 return false;
             }
-            const addButton = await product.$(this.selectors.addToCartButton);
-            if (!addButton) {
-                console.log('Add button not found');
-                return false;
-            }
-            await addButton.click();
-            await this.page.waitForTimeout(1000);
-            // Handle quantity increase
-            if (quantity > 1) {
-                for (let i = 1; i < quantity; i++) {
-                    const incrementBtn = await product.$(this.selectors.quantitySelector);
-                    if (incrementBtn) {
-                        await incrementBtn.click();
-                        await this.page.waitForTimeout(500);
+            const cardPrice = await card.evaluate((c, sel) => c.parentElement.querySelector(sel)?.textContent?.trim() || '', this.selectors.productPrice);
+            await card.locator(this.selectors.addToCartButton).click();
+            await this.page.waitForTimeout(1500);
+            const sheet = this.page.locator(this.selectors.variantSheet);
+            if (await sheet.isVisible()) {
+                // Pick the variant matching the card's price (the single-unit pack),
+                // falling back to the first variant.
+                const rows = sheet.locator(this.selectors.variantRow);
+                let row = rows.first();
+                for (let i = 0; i < (await rows.count()); i++) {
+                    const p = await rows.nth(i).locator(this.selectors.variantPrice).textContent();
+                    if (p?.trim() === cardPrice) {
+                        row = rows.nth(i);
+                        break;
                     }
+                }
+                await row.locator(this.selectors.stepperAdd).click();
+                await this.page.waitForTimeout(1000);
+                for (let i = 1; i < quantity; i++) {
+                    await row.locator(this.selectors.stepperPlus).click();
+                    await this.page.waitForTimeout(700);
+                }
+                await sheet.locator(this.selectors.variantSheetClose).click();
+                await this.page.waitForTimeout(1000);
+            }
+            else {
+                // Single-variant: ADD turns into an inline stepper; the same
+                // buttonpair-add element is the "+" button.
+                for (let i = 1; i < quantity; i++) {
+                    await card.locator(this.selectors.addToCartButton).click();
+                    await this.page.waitForTimeout(700);
                 }
             }
             return true;
@@ -278,20 +258,23 @@ export class SwiggyInstamartPlatform extends QuickCommercePlatform {
         if (!this.page)
             throw new Error('Platform not initialized');
         try {
-            // Click cart button to open cart
-            const cartBtn = await this.page.$(this.selectors.cartIcon);
-            if (cartBtn) {
-                await cartBtn.click();
-                await this.page.waitForTimeout(2000);
-            }
+            await this.openCart();
             const cartItems = await this.extractCartItems();
             const subtotal = cartItems.reduce((sum, item) => sum + (item.price * item.cartQuantity), 0);
+            // Bill section is plain text: "Item Total | ₹17.00 | ... | To Pay | ₹88".
+            const toPay = await this.page.evaluate(() => {
+                const lines = document.body.innerText.split('\n').map(l => l.trim());
+                const i = lines.indexOf('To Pay');
+                return i >= 0 ? lines.slice(i + 1).find(l => l) || '' : '';
+            });
+            const total = toPay ? this.parsePrice(toPay) : subtotal;
             return {
                 platform: this.name,
                 items: cartItems,
                 subtotal,
-                deliveryFee: 0, // Extract from page
-                total: subtotal,
+                // All fees combined (delivery, handling, small-cart, GST).
+                deliveryFee: Math.max(0, total - subtotal),
+                total,
             };
         }
         catch (error) {
@@ -307,17 +290,18 @@ export class SwiggyInstamartPlatform extends QuickCommercePlatform {
             const cartElements = await this.page.$$(this.selectors.cartItems);
             for (const element of cartElements) {
                 try {
-                    const name = await element.$eval('div[class*="itemName"], span[class*="itemName"]', el => el.textContent?.trim() || '');
-                    const priceText = await element.$eval('div[class*="price"], span[class*="price"]', el => el.textContent?.trim() || '');
-                    const price = this.parsePrice(priceText);
-                    const quantityText = await element.$eval('div[class*="quantity"], span[class*="qty"]', el => el.textContent?.trim() || '1');
-                    const cartQuantity = parseInt(quantityText) || 1;
+                    const name = await element.$eval(this.selectors.cartItemName, el => el.textContent?.trim() || '');
+                    const size = await element.$eval(this.selectors.cartItemQuantity, el => el.textContent?.trim() || '');
+                    const countText = await element.$eval(this.selectors.cartItemCount, el => el.textContent?.trim() || '1');
+                    const cartQuantity = parseInt(countText) || 1;
+                    // cart-item-price is the line total.
+                    const lineTotal = this.parsePrice(await element.$eval(this.selectors.cartItemPrice, el => el.textContent?.trim() || ''));
                     items.push({
-                        id: Math.random().toString(36).substring(7),
+                        id: name,
                         name,
-                        price,
+                        price: lineTotal / cartQuantity,
                         platform: this.name,
-                        quantity: '1 unit',
+                        quantity: size || '1 unit',
                         inStock: true,
                         cartQuantity,
                     });
@@ -332,13 +316,53 @@ export class SwiggyInstamartPlatform extends QuickCommercePlatform {
         }
         return items;
     }
+    async openCart() {
+        if (!this.page)
+            return;
+        await this.page.goto(`${this.baseUrl}/cart`, { waitUntil: 'domcontentloaded', timeout: 30000 });
+        await this.page.waitForTimeout(4000);
+    }
     async removeFromCart(productId) {
-        console.log('Remove from cart not yet implemented');
-        return false;
+        if (!this.page)
+            throw new Error('Platform not initialized');
+        try {
+            await this.openCart();
+            // Decrement until the row disappears.
+            for (let i = 0; i < 50; i++) {
+                const row = this.page
+                    .locator(this.selectors.cartItems)
+                    .filter({ has: this.page.locator(this.selectors.cartItemName, { hasText: productId }) })
+                    .first();
+                if ((await row.count()) === 0)
+                    return i > 0;
+                await row.locator(this.selectors.stepperMinus).click();
+                await this.page.waitForTimeout(1500);
+            }
+            return false;
+        }
+        catch (error) {
+            console.error('Error removing from cart:', error);
+            return false;
+        }
     }
     async clearCart() {
-        console.log('Clear cart not yet implemented');
-        return false;
+        if (!this.page)
+            throw new Error('Platform not initialized');
+        try {
+            await this.openCart();
+            for (let i = 0; i < 100; i++) {
+                const minus = await this.page.$(`${this.selectors.cartItems} ${this.selectors.stepperMinus}`);
+                if (!minus)
+                    return true;
+                await minus.click();
+                await this.page.waitForTimeout(1500);
+            }
+            return false;
+        }
+        catch (error) {
+            console.error('Error clearing cart:', error);
+            return false;
+        }
     }
     async getAddresses() {
         console.log('Get addresses not yet implemented');

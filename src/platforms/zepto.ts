@@ -8,7 +8,7 @@
  * 
  * Run: npx tsx src/session-helper.ts login zepto
  */
-import { BrowserContext, Page } from 'playwright';
+import { BrowserContext, ElementHandle, Page } from 'playwright';
 import {
   QuickCommercePlatform,
   Product,
@@ -172,21 +172,11 @@ export class ZeptoPlatform extends QuickCommercePlatform {
     }
 
     try {
-      // The homepage search bar is a link to a dedicated /search page - the
-      // actual text input only exists there, not on the homepage itself.
-      await this.page.goto(`${this.baseUrl}/search`, { waitUntil: 'domcontentloaded', timeout: 30000 });
-
-      const searchInput = await this.page.$(this.selectors.searchInput);
-      if (!searchInput) {
-        throw new Error('Search input not found');
-      }
-
-      await searchInput.click();
-      await searchInput.fill(query);
-      await this.page.keyboard.press('Enter');
-
-      // Wait for results to load
-      await this.page.waitForTimeout(3000);
+      // Typing into the bare /search page can leave its "trending" cards on
+      // screen; the query URL renders only the real results.
+      await this.page.goto(`${this.baseUrl}/search?query=${encodeURIComponent(query)}`, { waitUntil: 'domcontentloaded', timeout: 30000 });
+      await this.page.waitForLoadState('networkidle', { timeout: 10000 }).catch(() => {});
+      await this.page.waitForSelector(this.selectors.searchResults, { timeout: 10000 }).catch(() => {});
 
       // Extract products
       const products = await this.extractProductResults();
@@ -244,7 +234,7 @@ export class ZeptoPlatform extends QuickCommercePlatform {
             name: name || 'Unknown Product',
             price,
             mrp,
-            quantity: this.extractQuantity(name),
+            quantity: await this.extractCardQuantity(element, name),
             platform: this.name,
             inStock: true, // Assume in stock if visible
           });
@@ -263,6 +253,13 @@ export class ZeptoPlatform extends QuickCommercePlatform {
     // Extract numeric value from price text like "₹45", "Rs. 45", "45.00"
     const match = priceText.match(/[₹Rs.]?\s*(\d+(?:\.\d{2})?)/);
     return match ? parseFloat(match[1]) : 0;
+  }
+
+  // Pack size ("1 pack (250 ml)") is the card line right after the name.
+  private async extractCardQuantity(card: ElementHandle, name: string): Promise<string> {
+    const lines = (await card.innerText()).split('\n').map(l => l.trim());
+    const i = lines.indexOf(name);
+    return i >= 0 && lines[i + 1] ? lines[i + 1] : this.extractQuantity(name);
   }
 
   private extractQuantity(name: string): string {

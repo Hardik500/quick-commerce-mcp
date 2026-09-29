@@ -13,12 +13,30 @@ import {
 import { ZeptoPlatform } from './platforms/zepto.js';
 import { SwiggyInstamartPlatform } from './platforms/swiggy-instamart.js';
 import { BlinkitPlatform } from './platforms/blinkit.js';
-import { QuickCommercePlatform } from './platforms/base.js';
+import { QuickCommercePlatform, Product, SearchResult } from './platforms/base.js';
 import { StealthBrowser } from './engine/stealth-browser.js';
 import { sessionPath } from './session-helper.js';
 
 // All platforms supported by the "all" shorthand in tool inputs.
 const ALL_PLATFORMS = ['zepto', 'swiggy-instamart', 'blinkit'];
+
+function resolvePlatforms(list: string | string[]): string[] {
+  const names = ([] as string[]).concat(list);
+  return names.includes('all') ? ALL_PLATFORMS : names;
+}
+
+// Price per 100 ml/g (or per piece) so different pack sizes compare fairly.
+// ponytail: handles "450 ml", "1 L", "2 x 500 g", "6 pcs"; anything else is
+// ranked by raw price.
+function unitPrice(p: Product): { value: number; label: string } {
+  const m = p.quantity?.toLowerCase().match(/(?:(\d+)\s*x\s*)?(\d+(?:\.\d+)?)\s*(ml|l|ltr|litre|g|gm|kg|pc|pcs|pieces?|units?)\b/);
+  if (!m) return { value: p.price, label: 'pack' };
+  const amount = Number(m[1] || 1) * Number(m[2]);
+  const unit = m[3];
+  if (unit === 'ml' || unit === 'g' || unit === 'gm') return { value: (p.price / amount) * 100, label: unit === 'ml' ? '100 ml' : '100 g' };
+  if (unit === 'kg' || unit.startsWith('l')) return { value: p.price / (amount * 10), label: unit === 'kg' ? '100 g' : '100 ml' };
+  return { value: p.price / amount, label: 'pc' };
+}
 
 // Store active platform instances, each with its own browser context so
 // sessions (and any bot-detection fallout) stay isolated per platform.
@@ -29,7 +47,7 @@ const browsers: Map<string, StealthBrowser> = new Map();
 const TOOLS: Tool[] = [
   {
     name: 'search_products',
-    description: 'Search for products across quick commerce platforms (Zepto, Swiggy Instamart, BigBasket). Compare prices and availability.',
+    description: 'Search for products across quick commerce platforms (Zepto, Swiggy Instamart, Blinkit). When multiple platforms return results, includes a cheapest-first comparison by unit price.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -238,7 +256,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         const { query, platforms: platformList, pincode } = args as any;
         const results = [];
 
-        for (const platformName of platformList === 'all' ? ALL_PLATFORMS : platformList) {
+        for (const platformName of resolvePlatforms(platformList)) {
           try {
             // Check login first
             const platform = await getPlatform(platformName);
@@ -298,6 +316,23 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           responseText += '\n';
         }
 
+        // Cross-platform comparison over each platform's top 5 (most relevant) results.
+        const ok = results.filter((r): r is SearchResult => !('error' in r) && r.products.length > 0);
+        const priced = ok
+          .flatMap(r => r.products.slice(0, 5).filter(p => p.inStock))
+          .map(p => ({ p, u: unitPrice(p) }));
+        if (ok.length > 1 && priced.length > 0) {
+          // Only rank like against like (e.g. ₹/100 ml): use the most common unit.
+          const counts = new Map<string, number>();
+          for (const { u } of priced) counts.set(u.label, (counts.get(u.label) || 0) + 1);
+          const unit = [...counts].sort((a, b) => b[1] - a[1])[0][0];
+          const ranked = priced.filter(x => x.u.label === unit).sort((a, b) => a.u.value - b.u.value);
+          responseText += `💰 **Cheapest (by unit price)**\n`;
+          for (const { p, u } of ranked.slice(0, 5)) {
+            responseText += `- ₹${u.value.toFixed(2)}/${u.label} — ${p.name} (${p.quantity}) ₹${p.price} on ${p.platform}\n`;
+          }
+        }
+
         return {
           content: [{ type: 'text', text: responseText }],
         };
@@ -307,7 +342,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         const { platforms: platformList } = args as any;
         const statuses = [];
 
-        for (const platformName of platformList === 'all' ? ALL_PLATFORMS : platformList) {
+        for (const platformName of resolvePlatforms(platformList)) {
           try {
             const platform = await getPlatform(platformName);
             const status = await platform.checkLogin();

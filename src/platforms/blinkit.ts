@@ -175,7 +175,9 @@ export class BlinkitPlatform extends QuickCommercePlatform {
         timeout: 30000,
       });
 
-      await this.page.waitForTimeout(3000);
+      // Results render after a skeleton that can outlast a fixed delay on a
+      // cold page; a timeout here just means no results.
+      await this.page.waitForSelector(this.selectors.productName, { timeout: 15000 }).catch(() => {});
 
       const products = await this.extractProductResults();
 

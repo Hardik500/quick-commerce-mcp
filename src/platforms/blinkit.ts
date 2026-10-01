@@ -503,8 +503,20 @@ export class BlinkitPlatform extends QuickCommercePlatform {
       await frameEl.waitFor({ timeout: 15000 });
       const frame = this.page.frameLocator('iframe[src*="zpaykit"]').first();
       await frame.getByText(/UPI/).first().waitFor({ timeout: 15000 });
-      const text = await frame.locator('body').innerText();
-      return { cart, address, paymentMethods: this.scanPaymentMethods(text) };
+      // Panels are accordions (opening one collapses the other), so open the
+      // ones that hide options and accumulate their text.
+      let text = await frame.locator('body').innerText();
+      for (const title of ['Wallets', 'UPI']) {
+        const head = frame.locator('h5', { hasText: new RegExp(`^${title}$`) }).first();
+        if (!(await head.count())) continue;
+        await head.click({ timeout: 3000 }).catch(() => {});
+        await frame.getByText(title === 'UPI' ? /Select UPI APP/i : /LINK|Mobikwik|Paytm/i).first().waitFor({ timeout: 4000 }).catch(() => {});
+        text += '\n' + (await frame.locator('body').innerText());
+      }
+      const paymentMethods = this.scanPaymentMethods(text);
+      // The "Cash" panel always carries a "not available below ₹50" note.
+      if (/^Cash$/m.test(text) && cart.total >= 50) paymentMethods.push('Cash on Delivery');
+      return { cart, address, paymentMethods };
     } catch (error) {
       console.error('Error getting order preview:', error);
       return null;

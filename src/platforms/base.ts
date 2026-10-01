@@ -182,14 +182,16 @@ export abstract class QuickCommercePlatform {
   private static readonly PAYMENT_LABELS = [
     'Google Pay', 'GPay', 'PhonePe', 'Paytm', 'BHIM', 'CRED', 'Amazon Pay', 'Mobikwik',
     'LazyPay', 'Pluxee', 'Netbanking', 'Net Banking', 'Cash on Delivery', 'Pay on Delivery',
-    'Add New Card', 'Add credit or debit cards', 'Navi', 'Pay via QR Code', 'UPI',
+    'Add New Card', 'Add credit or debit cards', 'Navi', 'Pay via QR Code', 'Pay Later', 'UPI',
   ];
 
   protected scanPaymentMethods(text: string): string[] {
+    // "Cash on delivery is not available for orders below ₹50" is not an option.
+    text = text.replace(/cash on delivery is not available[^\n]*/gi, '');
     const lower = text.toLowerCase();
     const labels = QuickCommercePlatform.PAYMENT_LABELS.filter(l => lower.includes(l.toLowerCase()));
-    // Saved cards render as "HDFC Credit Card\n**** 9292".
-    const cards = [...text.matchAll(/([A-Za-z][A-Za-z ]*?(?:Credit|Debit) Card)\s*\*{2,4}\s*(\d{4})/g)]
+    // Saved cards render as "HDFC Credit Card\n**** 9292" / "Hsbc Mastercard Card\n****** 8023".
+    const cards = [...text.matchAll(/([A-Za-z][A-Za-z ]*? Card)\s*\*{2,6}\s*(\d{4})/g)]
       .map(m => `${m[1].trim()} ••${m[2]}`);
     return [...new Set([...labels, ...cards])];
   }

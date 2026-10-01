@@ -61,6 +61,12 @@ export function rankByUnitPrice(products: Product[]): { p: Product; u: { value: 
   return priced.filter(x => x.u.label === unit).sort((a, b) => a.u.value - b.u.value);
 }
 
+// Store-closed / unserviceable banners shown on cart pages.
+export function storeNotice(pageText: string): string | undefined {
+  const m = pageText.match(/[^\n]*(currently unserviceable|store (is )?(currently )?closed|not accepting orders|currently unavailable|no longer delivering)[^\n]*/i);
+  return m?.[0].trim();
+}
+
 // Compare what was requested with what the cart holds, and check items + fees = total.
 // ponytail: matches cart rows by case-insensitive name; Blinkit/Zepto cart rows carry no product id.
 export function validateCart(

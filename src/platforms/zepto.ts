@@ -19,6 +19,7 @@ import {
   Address,
 } from './base.js';
 import { sessionPath, ensureSessionDir } from '../session-helper.js';
+import { storeNotice } from '../ranking.js';
 
 /** Zepto bill rows: "Item Total ₹125 ₹123", "Delivery Fee ₹30", "Handling Fee ₹10 FREE" (waived = 0). */
 export function parseZeptoBill(rows: string[]): { subtotal: number; total: number; fees: { label: string; amount: number }[] } {
@@ -365,6 +366,7 @@ export class ZeptoPlatform extends QuickCommercePlatform {
         deliveryFee: total - subtotal,
         fees,
         total,
+        notice: storeNotice(await this.page.locator('body').innerText().catch(() => '')),
       };
     } catch (error) {
       console.error('Error getting cart:', error);

@@ -13,6 +13,7 @@ import {
   Address,
 } from './base.js';
 import { sessionPath, ensureSessionDir } from '../session-helper.js';
+import { storeNotice } from '../ranking.js';
 
 /** Bill rows look like "Items total Saved ₹2 ₹195 ₹193" or "Handling charge ₹12": last ₹ amount is what's charged. */
 export function parseBill(rows: string[]): { subtotal: number; total: number; fees: { label: string; amount: number }[] } {
@@ -381,6 +382,7 @@ export class BlinkitPlatform extends QuickCommercePlatform {
         deliveryFee: total && subtotal ? total - subtotal : 0,
         fees,
         total: total || subtotal,
+        notice: storeNotice(await this.page.locator('body').innerText().catch(() => '')),
       };
     } catch (error) {
       console.error('Error getting cart:', error);

@@ -31,6 +31,8 @@ export interface CartSummary {
   fees?: { label: string; amount: number }[];
   total: number;
   deliverySlot?: string;
+  /** Store closed / unserviceable banner, when the platform shows one. */
+  notice?: string;
 }
 
 export interface SearchResult {

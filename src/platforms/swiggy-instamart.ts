@@ -13,6 +13,7 @@ import {
   Address,
 } from './base.js';
 import { sessionPath, ensureSessionDir } from '../session-helper.js';
+import { storeNotice } from '../ranking.js';
 
 /**
  * Instamart bill is one text line per cell: label, then "struck original, actual" or a single amount or "FREE"
@@ -342,6 +343,7 @@ export class SwiggyInstamartPlatform extends QuickCommercePlatform {
         deliveryFee: Math.max(0, total - subtotal),
         fees: bill.fees,
         total,
+        notice: storeNotice(await this.page.locator('body').innerText().catch(() => '')),
       };
     } catch (error) {
       console.error('Error getting cart:', error);

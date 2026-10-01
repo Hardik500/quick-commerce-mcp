@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { unitPrice, relevant, rankByUnitPrice, resolveItem, validateCart } from './ranking.js';
+import { unitPrice, relevant, rankByUnitPrice, resolveItem, validateCart, storeNotice } from './ranking.js';
 import { BlinkitPlatform, parseBill } from './platforms/blinkit.js';
 import { parseZeptoBill } from './platforms/zepto.js';
 import { parseInstamartBill } from './platforms/swiggy-instamart.js';
@@ -91,4 +91,10 @@ test("resolveItem: brand footer after | does not trigger synonym match", () => {
   const mk = (id: string, name: string) => ({ id, name, price: 38, quantity: "750 ml", inStock: true }) as any;
   const r = resolveItem("coke zero", [mk("1", "Sprite Zero | Lemon-Lime | The Coca-Cola Company"), mk("2", "Coca-Cola Zero Sugar PET| Cola | The Coca-Cola Company")]);
   assert.equal(r.status, "match"); assert.deepEqual(r.options.map(o => o.id), ["2"]);
+});
+
+test("storeNotice: detects closed/unserviceable banners, ignores normal carts", () => {
+  assert.match(storeNotice("To Pay\nThis Instamart store is currently unserviceable\nRetry")!, /unserviceable/);
+  assert.match(storeNotice("Sorry, store closed for the night")!, /closed/);
+  assert.equal(storeNotice("To Pay\n₹138\nProceed to Pay"), undefined);
 });

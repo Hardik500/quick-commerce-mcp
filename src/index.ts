@@ -517,24 +517,32 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           };
         }
 
+        // Items already in the cart have no ADD button; skip them (validation below flags quantity differences).
+        const norm = (s: string) => s.toLowerCase().replace(/\s+/g, ' ').trim();
+        const existing = (await platform.getCart().catch(() => null))?.items ?? [];
         const results = [];
         for (const item of items) {
+          if (item.name && existing.some(e => norm(e.name) === norm(item.name))) {
+            results.push({ name: item.name, success: true, already: true });
+            continue;
+          }
           // addToCart clicks the product card on the current page, so bring the card up first.
           if (item.name) await platform.search(item.name).catch(() => null);
           const success = await platform.addToCart(item.productId, item.quantity);
-          results.push({ name: item.name ?? item.productId, success });
+          results.push({ name: item.name ?? item.productId, success, already: false });
         }
 
         const failed = results.filter(r => !r.success).length;
         let responseText = `${failed ? '⚠️' : '✅'} Added to cart on **${platformName.toUpperCase()}**${failed ? ` (${failed} of ${results.length} failed)` : ''}:\n\n`;
         for (const result of results) {
-          responseText += result.success ? `✓ ${result.name}\n` : `✗ ${result.name} (failed)\n`;
+          responseText += result.already ? `✓ ${result.name} (already in cart, not re-added)\n` : result.success ? `✓ ${result.name}\n` : `✗ ${result.name} (failed)\n`;
         }
 
         // Verify against the real cart, not just the click results.
         const cart = await platform.getCart();
         if (!cart) responseText += `\n⚠️ Could not read the cart back to verify.\n`;
         else {
+          if (cart.notice) responseText += `\n🚫 **Store notice: ${cart.notice}** - checkout is not possible right now; try again later or another platform.\n`;
           const v = validateCart(items.map((i: any) => ({ name: i.name ?? '', quantity: i.quantity })).filter((i: any) => i.name), cart);
           if (v.missing.length || v.wrongQty.length || !v.billOk) {
             responseText += `\n⚠️ **Cart validation failed**\n`;
@@ -593,8 +601,11 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
 
         const preview = await platform.getOrderPreview();
         if (!preview) {
+          const notice = (await platform.getCart().catch(() => null))?.notice;
           return {
-            content: [{ type: 'text', text: `❌ Could not build an order preview on ${platformName.toUpperCase()} (empty cart or checkout unavailable).` }],
+            content: [{ type: 'text', text: notice
+              ? `🚫 ${platformName.toUpperCase()} cannot take orders right now: "${notice}". Try again later or use another platform.`
+              : `❌ Could not build an order preview on ${platformName.toUpperCase()} (empty cart or checkout unavailable).` }],
           };
         }
 

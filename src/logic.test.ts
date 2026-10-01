@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { unitPrice, relevant, rankByUnitPrice, resolveItem } from './ranking.js';
-import { BlinkitPlatform } from './platforms/blinkit.js';
+import { BlinkitPlatform, parseBill } from './platforms/blinkit.js';
 import type { Product } from './platforms/base.js';
 
 const prod = (o: Partial<Product>): Product =>
@@ -58,4 +58,10 @@ test("resolveItem: match, synonym, out-of-stock and alternatives", () => {
   const pan = resolveItem("high protein paneer", ps);
   assert.equal(pan.status, "alternatives"); assert.equal(pan.outOfStock, true); assert.equal(pan.options[0].id, "c");
   assert.equal(resolveItem("xyz", ps).status, "none");
+});
+
+test("parseBill: discounted items total and unknown charges", () => {
+  const b = parseBill(["Bill details", "Items total Saved ₹2 ₹195 ₹193", "Delivery charge ₹30", "Handling charge ₹12", "Late night convenience charge ₹15", "Grand total ₹250"]);
+  assert.equal(b.subtotal, 193); assert.equal(b.total, 250);
+  assert.deepEqual(b.fees.map(f => f.amount), [30, 12, 15]);
 });

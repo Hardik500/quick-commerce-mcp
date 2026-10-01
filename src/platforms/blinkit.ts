@@ -14,6 +14,23 @@ import {
 } from './base.js';
 import { sessionPath, ensureSessionDir } from '../session-helper.js';
 
+/** Bill rows look like "Items total Saved ₹2 ₹195 ₹193" or "Handling charge ₹12": last ₹ amount is what's charged. */
+export function parseBill(rows: string[]): { subtotal: number; total: number; fees: { label: string; amount: number }[] } {
+  let subtotal = 0, total = 0;
+  const fees: { label: string; amount: number }[] = [];
+  for (const r of rows) {
+    const text = r.replace(/\s+/g, ' ').trim();
+    const amounts = [...text.matchAll(/₹\s*([\d,]+(?:\.\d+)?)/g)].map(m => Number(m[1].replace(/,/g, '')));
+    if (!amounts.length) continue; // header row
+    const label = text.slice(0, text.indexOf('₹')).replace(/\s*Saved\s*$/i, '').trim();
+    const amount = amounts[amounts.length - 1];
+    if (/^items total/i.test(label)) subtotal = amount;
+    else if (/^grand total/i.test(label)) total = amount;
+    else if (amount) fees.push({ label, amount });
+  }
+  return { subtotal, total, fees };
+}
+
 export class BlinkitPlatform extends QuickCommercePlatform {
   // Verified against the live site with an authenticated session
   // (scripts/inspect-blinkit-authed.ts) on 2026-09-29. Blinkit's product
@@ -354,27 +371,8 @@ export class BlinkitPlatform extends QuickCommercePlatform {
       await this.openCart();
       const cartItems = await this.extractCartItems();
 
-      // Bill rows (Items total / Delivery charge / Handling charge / Grand
-      // total) share one container; match by label text next to it.
-      const billValue = async (label: string): Promise<number> => {
-        const row = this.page!.locator(this.selectors.billRow).filter({
-          has: this.page!.locator(this.selectors.billLabel, { hasText: label }),
-        });
-        const text = await row.locator(this.selectors.billValue).first().textContent().catch(() => null);
-        return text ? this.parsePrice(text) : 0;
-      };
-
-      const subtotal = await billValue('Items total');
-      const total = await billValue('Grand total');
-
-      const fees: { label: string; amount: number }[] = [];
-      for (const label of ['Delivery charge', 'Handling charge', 'Small cart charge', 'Feeding India donation', 'Tip']) {
-        const amount = await billValue(label);
-        if (amount) fees.push({ label, amount });
-      }
-      // Anything on the bill we didn't recognise still shows up, so fees always sum to total - subtotal.
-      const rest = total && subtotal ? total - subtotal - fees.reduce((s, f) => s + f.amount, 0) : 0;
-      if (rest > 0) fees.push({ label: 'Other charges', amount: rest });
+      const rows = await this.page.locator(this.selectors.billRow).evaluateAll(e => e.map(x => (x as HTMLElement).innerText));
+      const { subtotal, total, fees } = parseBill(rows);
 
       return {
         platform: this.name,

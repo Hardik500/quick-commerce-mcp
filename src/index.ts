@@ -47,6 +47,17 @@ const browsers: Map<string, StealthBrowser> = new Map();
 // One-time confirm tokens for place_order (step 2 must present the token from step 1).
 const orderTokens: Map<string, { platform: string; total: number; expires: number }> = new Map();
 
+// Payment modes place_order can drive, per platform. Anything else gets a friendly refusal.
+const SUPPORTED_PAYMENTS: Record<string, string[]> = {
+  blinkit: ['cod', 'upi'],
+  zepto: ['cod'],
+  swiggy: ['cod'],
+  'swiggy-instamart': ['cod'],
+};
+
+/** Asked right after login: tells the agent to collect the payment mode (and UPI ID) up front. */
+const PAYMENT_PROMPT = '\n\n💳 Before ordering, ask the user how they want to pay and tell them what is supported:\n- Cash on Delivery ("cod"): Blinkit, Zepto, Instamart\n- UPI collect request ("upi", needs their UPI ID like name@bank; approved on their phone): Blinkit only\n- Cards, wallets, netbanking, Pay Later: not supported.\nIf they choose UPI, ask for the UPI ID now.';
+
 // Tool definitions
 const TOOLS: Tool[] = [
   {
@@ -156,7 +167,7 @@ const TOOLS: Tool[] = [
       type: 'object',
       properties: {
         platform: { type: 'string', enum: ['zepto', 'swiggy', 'swiggy-instamart', 'blinkit'], description: 'Platform to order on' },
-        payment_method: { type: 'string', enum: ['cod', 'upi'], description: 'Payment method. "upi" (Blinkit only) sends a collect request to upi_id; the user approves it on their phone.' },
+        payment_method: { type: 'string', description: 'Payment method the user chose: "cod" (all platforms) or "upi" (Blinkit only; sends a collect request to upi_id that the user approves on their phone). Other modes are refused with the supported list.' },
         upi_id: { type: 'string', description: 'UPI ID (e.g. name@bank); required for payment_method "upi"' },
         confirm_token: { type: 'string', description: 'Token returned by step 1; places the order' },
       },
@@ -425,6 +436,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
             responseText += `❌ ${status.platform}: Not logged in\n`;
           }
         }
+        if (statuses.some(s => 'loggedIn' in s && s.loggedIn)) responseText += PAYMENT_PROMPT;
 
         return {
           content: [{ type: 'text', text: responseText }],
@@ -446,7 +458,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           
           if (success) {
             return {
-              content: [{ type: 'text', text: `✅ Successfully logged in to ${platformName}` }],
+              content: [{ type: 'text', text: `✅ Successfully logged in to ${platformName}${PAYMENT_PROMPT}` }],
             };
           } else {
             return {
@@ -570,6 +582,13 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         const platform = platforms.get(platformName);
         if (!platform) return { content: [{ type: 'text', text: `❌ Platform not initialized. Search first.` }] };
         const say = (text: string) => ({ content: [{ type: 'text', text }] });
+
+        const method = String(payment_method ?? '').toLowerCase();
+        const allowed = SUPPORTED_PAYMENTS[platformName] ?? [];
+        if (!allowed.includes(method)) {
+          return say(`❌ "${payment_method}" is not supported on ${platformName}. Supported there: ${allowed.join(', ')}. (UPI works on Blinkit only; cards, wallets and netbanking are not supported.) Ask the user to pick another mode.`);
+        }
+        if (method === 'upi' && !upi_id) return say('❌ UPI selected: ask the user for their UPI ID (name@bank) and pass it as upi_id.');
 
         if (!confirm_token) {
           const r = await platform.placeOrder(payment_method, false, upi_id);

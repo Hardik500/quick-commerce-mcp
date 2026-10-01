@@ -156,7 +156,8 @@ const TOOLS: Tool[] = [
       type: 'object',
       properties: {
         platform: { type: 'string', enum: ['zepto', 'swiggy', 'swiggy-instamart', 'blinkit'], description: 'Platform to order on' },
-        payment_method: { type: 'string', enum: ['cod'], description: 'Payment method' },
+        payment_method: { type: 'string', enum: ['cod', 'upi'], description: 'Payment method. "upi" (Blinkit only) sends a collect request to upi_id; the user approves it on their phone.' },
+        upi_id: { type: 'string', description: 'UPI ID (e.g. name@bank); required for payment_method "upi"' },
         confirm_token: { type: 'string', description: 'Token returned by step 1; places the order' },
       },
       required: ['platform', 'payment_method'],
@@ -565,19 +566,19 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       }
 
       case 'place_order': {
-        const { platform: platformName, payment_method, confirm_token } = args as any;
+        const { platform: platformName, payment_method, confirm_token, upi_id } = args as any;
         const platform = platforms.get(platformName);
         if (!platform) return { content: [{ type: 'text', text: `❌ Platform not initialized. Search first.` }] };
         const say = (text: string) => ({ content: [{ type: 'text', text }] });
 
         if (!confirm_token) {
-          const r = await platform.placeOrder(payment_method, false);
+          const r = await platform.placeOrder(payment_method, false, upi_id);
           if (!r.ready) return say(`❌ ${r.message}`);
           const preview = await platform.getCart();
           const token = randomUUID();
           orderTokens.set(token, { platform: platformName, total: r.total!, expires: Date.now() + 5 * 60_000 });
           const items = preview?.items.map(i => `${i.cartQuantity}x ${i.name}`).join(', ') ?? '';
-          return say(`🛑 **Ready to place — NOT yet ordered.**\n${items}\n**To pay: ₹${r.total} (Cash on Delivery)**\nTo place this order, get the user's explicit approval, then call place_order again with confirm_token: ${token} (valid 5 min).`);
+          return say(`🛑 **Ready to place — NOT yet ordered.**\n${items}\n**To pay: ₹${r.total} (${payment_method === 'upi' ? `UPI collect request to ${upi_id}; the user approves it on their phone` : 'Cash on Delivery'})**\nTo place this order, get the user's explicit approval, then call place_order again with the same payment_method${payment_method === 'upi' ? ' and upi_id' : ''} and confirm_token: ${token} (valid 5 min).`);
         }
 
         const t = orderTokens.get(confirm_token);

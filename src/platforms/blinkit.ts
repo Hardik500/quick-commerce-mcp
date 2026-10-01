@@ -570,9 +570,47 @@ export class BlinkitPlatform extends QuickCommercePlatform {
 
   private armedTotal?: number;
 
-  async placeOrder(paymentMethod: string, confirm = false): Promise<any> {
+  /** UPI collect: fill the VPA, stop before "Checkout" (which sends the request to the phone). */
+  private async placeUpiOrder(confirm: boolean, upiId?: string): Promise<any> {
+    const page = this.page!;
+    const frame = page.frameLocator('iframe[src*="zpaykit"]').first();
+    const vpa = frame.locator('input[type="text"]:visible').first();
+    const checkout = frame.locator('button:visible', { hasText: /^Checkout$/ }).first();
+
+    if (!confirm) {
+      this.armedTotal = undefined;
+      if (!upiId || !/^[\w.\-]{2,}@[a-zA-Z]{2,}$/.test(upiId)) return { success: false, message: 'upi_id is required, e.g. name@bank.' };
+      const preview = await this.getOrderPreview();
+      if (!preview) return { success: false, message: 'Could not reach checkout (empty cart?).' };
+      await frame.getByText('Add new UPI ID').first().click({ timeout: 5000 });
+      await vpa.fill(upiId, { timeout: 5000 });
+      await checkout.waitFor({ timeout: 5000 });
+      this.armedTotal = preview.cart.total;
+      return { success: false, ready: true, total: preview.cart.total, message: `UPI ID entered; stopped before "Checkout" (sends a collect request to ${upiId}).` };
+    }
+
+    if (this.armedTotal === undefined) return { success: false, message: 'Checkout is not armed; run the first step again.' };
+    this.armedTotal = undefined; // one shot
+    if (!(await vpa.inputValue().catch(() => '')) || !(await checkout.isVisible().catch(() => false))) {
+      return { success: false, message: 'Checkout screen changed since the preview; nothing was requested. Run the first step again.' };
+    }
+    await checkout.click({ timeout: 5000 });
+    // The user approves on their phone; wait for the page to leave checkout or show an outcome.
+    // ponytail: outcome strings are a guess until observed live; raw page text is always returned.
+    const outcome = 'order (placed|confirmed)|payment (successful|failed|unsuccessful|declined)|request (expired|declined)|try again';
+    const done = await page.waitForFunction(
+      (src: string) => !location.href.includes('checkout') || new RegExp(src, 'i').test(document.body.innerText),
+      outcome, { timeout: 180_000 },
+    ).then(() => true, () => false);
+    const text = (await page.locator('body').innerText().catch(() => '')).replace(/\s+/g, ' ').slice(0, 300);
+    const ok = done && !/fail|declin|expired|try again|unsuccessful/i.test(text);
+    return { success: ok, message: done ? `After the collect request, page shows: ${text}` : `No outcome within 3 min (request not approved?). Page shows: ${text}` };
+  }
+
+  async placeOrder(paymentMethod: string, confirm = false, upiId?: string): Promise<any> {
     if (!this.page) throw new Error('Platform not initialized');
-    if (paymentMethod !== 'cod') return { success: false, message: 'Only "cod" is supported on Blinkit.' };
+    if (paymentMethod === 'upi') return this.placeUpiOrder(confirm, upiId);
+    if (paymentMethod !== 'cod') return { success: false, message: 'Only "cod" and "upi" are supported on Blinkit.' };
     const frame = this.page.frameLocator('iframe[src*="zpaykit"]').first();
     const payNow = this.page.getByText(/^Pay Now/).last();
 

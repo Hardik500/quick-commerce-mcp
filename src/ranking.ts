@@ -20,6 +20,36 @@ export function relevant(query: string, products: Product[]): Product[] {
   return products.filter(p => p.inStock && words.every(w => p.name.toLowerCase().includes(w)));
 }
 
+// ponytail: tiny hand-made synonym table; extend when a real query misses.
+const SYNONYMS: Record<string, string[]> = { coke: ['coca-cola', 'coca cola'], pepsi: ['pepsi'], curd: ['dahi'], dahi: ['curd'] };
+
+const hits = (name: string, word: string) =>
+  [word, ...(SYNONYMS[word] ?? [])].some(w => name.includes(w));
+
+export interface Resolution {
+  query: string;
+  status: 'match' | 'alternatives' | 'none';
+  /** match: exact in-stock hits (best first). alternatives: partial in-stock hits. */
+  options: Product[];
+  /** True when exact matches exist but are all out of stock. */
+  outOfStock: boolean;
+}
+
+// Exact = every query word present and in stock. Otherwise offer in-stock
+// partial matches (most words matched first, then cheapest unit price).
+export function resolveItem(query: string, products: Product[], max = 5): Resolution {
+  const words = query.toLowerCase().split(/\s+/).filter(w => w.length > 1).map(w => w.replace(/s$/, ''));
+  const seen = new Set<string>();
+  products = products.filter(p => { const k = `${p.name}|${p.quantity}`; return !seen.has(k) && !!seen.add(k); });
+  const scored = products.map(p => ({ p, n: words.filter(w => hits(p.name.toLowerCase(), w)).length }));
+  const exact = scored.filter(x => x.n === words.length);
+  const byPrice = (a: { p: Product }, b: { p: Product }) => unitPrice(a.p).value - unitPrice(b.p).value;
+  const exactIn = exact.filter(x => x.p.inStock).sort(byPrice).map(x => x.p);
+  if (exactIn.length) return { query, status: 'match', options: exactIn.slice(0, max), outOfStock: false };
+  const partial = scored.filter(x => x.p.inStock && x.n > 0).sort((a, b) => b.n - a.n || byPrice(a, b)).map(x => x.p);
+  return { query, status: partial.length ? 'alternatives' : 'none', options: partial.slice(0, max), outOfStock: exact.length > 0 };
+}
+
 // Cheapest first by unit price, ranking only the most common unit so ₹/100 ml
 // isn't compared against ₹/pc.
 export function rankByUnitPrice(products: Product[]): { p: Product; u: { value: number; label: string } }[] {

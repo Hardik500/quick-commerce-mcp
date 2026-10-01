@@ -27,6 +27,8 @@ export interface CartSummary {
   items: CartItem[];
   subtotal: number;
   deliveryFee: number;
+  /** Itemised charges beyond the items total (delivery, handling, small cart, ...). */
+  fees?: { label: string; amount: number }[];
   total: number;
   deliverySlot?: string;
 }

@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { unitPrice, relevant, rankByUnitPrice } from './ranking.js';
+import { unitPrice, relevant, rankByUnitPrice, resolveItem } from './ranking.js';
 import { BlinkitPlatform } from './platforms/blinkit.js';
 import type { Product } from './platforms/base.js';
 
@@ -49,4 +49,13 @@ test('scanPaymentMethods', () => {
   assert.deepEqual(found.sort(), ['Cash on Delivery', 'Google Pay', 'Hsbc Mastercard Card ••8023', 'UPI'].sort());
   const unavailable: string[] = platform.scanPaymentMethods('Cash on delivery is not available for orders below ₹50\nPhonePe');
   assert.deepEqual(unavailable, ['PhonePe']);
+});
+
+test("resolveItem: match, synonym, out-of-stock and alternatives", () => {
+  const ps = [prod({ id: "a", name: "Coca-Cola Zero Sugar", quantity: "300 ml", price: 40 }), prod({ id: "b", name: "Amul High Protein Paneer", quantity: "200 g", price: 120, inStock: false }), prod({ id: "c", name: "Amul Fresh Paneer", quantity: "200 g", price: 90 })];
+  const coke = resolveItem("coke zero", ps);
+  assert.equal(coke.status, "match"); assert.equal(coke.options[0].id, "a");
+  const pan = resolveItem("high protein paneer", ps);
+  assert.equal(pan.status, "alternatives"); assert.equal(pan.outOfStock, true); assert.equal(pan.options[0].id, "c");
+  assert.equal(resolveItem("xyz", ps).status, "none");
 });

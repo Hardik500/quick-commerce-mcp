@@ -17,7 +17,13 @@ import { BlinkitPlatform } from './platforms/blinkit.js';
 import { QuickCommercePlatform, Product, SearchResult } from './platforms/base.js';
 import { StealthBrowser } from './engine/stealth-browser.js';
 import { sessionPath } from './session-helper.js';
-import { relevant, rankByUnitPrice } from './ranking.js';
+import { relevant, rankByUnitPrice, resolveItem, unitPrice } from './ranking.js';
+
+// One line per fee; platforms without itemisation fall back to a lump "Fees" line.
+function feeLines(cart: { fees?: { label: string; amount: number }[]; deliveryFee: number }): string {
+  const fees = cart.fees?.length ? cart.fees : cart.deliveryFee ? [{ label: 'Fees', amount: cart.deliveryFee }] : [];
+  return fees.map(f => `${f.label}: ₹${f.amount}\n`).join('');
+}
 
 // All platforms supported by the "all" shorthand in tool inputs.
 const ALL_PLATFORMS = ['zepto', 'swiggy-instamart', 'blinkit'];
@@ -111,6 +117,18 @@ const TOOLS: Tool[] = [
         },
       },
       required: ['platform', 'otp'],
+    },
+  },
+  {
+    name: 'resolve_items',
+    description: 'Resolve shopping-list items (e.g. "high protein paneer", "coke zero") on ONE platform without touching the cart. For each item returns in-stock matches, or, if there is no exact match or it is out of stock, the closest in-stock alternatives. Present the options and let the user choose before add_to_cart.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        platform: { type: 'string', enum: ['zepto', 'swiggy', 'swiggy-instamart', 'blinkit'], description: 'Platform to search' },
+        queries: { type: 'array', items: { type: 'string' }, description: 'Items the user wants' },
+      },
+      required: ['platform', 'queries'],
     },
   },
   {
@@ -544,7 +562,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         }
         
         responseText += `\nSubtotal: ₹${cart.subtotal}\n`;
-        responseText += `Delivery: ₹${cart.deliveryFee}\n`;
+        responseText += feeLines(cart);
         responseText += `**Total: ₹${cart.total}**`;
 
         return {
@@ -571,7 +589,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         for (const item of cart.items) {
           responseText += `${item.cartQuantity}x ${item.name} - ₹${item.price * item.cartQuantity}\n`;
         }
-        responseText += `\nSubtotal: ₹${cart.subtotal}\nFees: ₹${cart.deliveryFee}\n**To pay: ₹${cart.total}**\n`;
+        responseText += `\nItems total: ₹${cart.subtotal}\n${feeLines(cart)}**To pay: ₹${cart.total}**\n`;
         responseText += `\n📍 Deliver to: ${preview.address || 'unknown'}\n`;
         responseText += `💳 Payment options: ${preview.paymentMethods.join(', ') || 'none detected'}`;
 
@@ -612,6 +630,27 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         const out: any[] = [{ type: 'text', text: `${r.success ? '✅' : '❌'} ${r.message}` }];
         if (r.image) out.push({ type: 'image', data: r.image.toString('base64'), mimeType: 'image/png' });
         return { content: out };
+      }
+
+      case 'resolve_items': {
+        const { platform: platformName, queries } = args as any;
+        const say = (text: string) => ({ content: [{ type: 'text', text }] });
+        const platform = await getPlatform(platformName);
+        const login = await platform.checkLogin();
+        if (!login.loggedIn) return say(`❌ Not logged in on ${platformName}.`);
+        let text = `🔎 **Item resolution - ${platformName.toUpperCase()}** (nothing added to cart)\n`;
+        for (const q of queries as string[]) {
+          const res = resolveItem(q, (await platform.search(q)).products);
+          const head = res.status === 'match' ? `✅ "${q}": matches found (pick one)`
+            : res.status === 'alternatives' ? `⚠️ "${q}": ${res.outOfStock ? 'exact match is out of stock' : 'no exact match'}; closest in-stock options (ask the user to choose)`
+            : `❌ "${q}": nothing in stock${res.outOfStock ? ' (exact match is out of stock)' : ''}; ask the user for a different item or platform`;
+          text += `\n${head}\n`;
+          res.options.forEach((p, i) => {
+            const u = unitPrice(p);
+            text += `${i + 1}. ${p.name} (${p.quantity}) - ₹${p.price} (₹${u.value.toFixed(1)}/${u.label}) ID: \`${p.id}\`\n`;
+          });
+        }
+        return say(text + '\nAdd the user\'s chosen products with add_to_cart, then show get_order_preview.');
       }
 
       case 'compare_prices': {

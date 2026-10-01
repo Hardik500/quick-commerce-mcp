@@ -367,11 +367,21 @@ export class BlinkitPlatform extends QuickCommercePlatform {
       const subtotal = await billValue('Items total');
       const total = await billValue('Grand total');
 
+      const fees: { label: string; amount: number }[] = [];
+      for (const label of ['Delivery charge', 'Handling charge', 'Small cart charge', 'Feeding India donation', 'Tip']) {
+        const amount = await billValue(label);
+        if (amount) fees.push({ label, amount });
+      }
+      // Anything on the bill we didn't recognise still shows up, so fees always sum to total - subtotal.
+      const rest = total && subtotal ? total - subtotal - fees.reduce((s, f) => s + f.amount, 0) : 0;
+      if (rest > 0) fees.push({ label: 'Other charges', amount: rest });
+
       return {
         platform: this.name,
         items: cartItems,
         subtotal: subtotal || cartItems.reduce((sum, item) => sum + item.price * item.cartQuantity, 0),
         deliveryFee: total && subtotal ? total - subtotal : 0,
+        fees,
         total: total || subtotal,
       };
     } catch (error) {

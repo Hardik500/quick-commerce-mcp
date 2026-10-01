@@ -466,7 +466,8 @@ export class ZeptoPlatform extends QuickCommercePlatform {
 
   async placeOrder(paymentMethod: string, confirm = false): Promise<any> {
     if (!this.page) throw new Error('Platform not initialized');
-    if (paymentMethod !== 'cod') return { success: false, message: 'Only "cod" is supported on Zepto.' };
+    if (paymentMethod === 'upi_qr') return this.placeQrOrder(confirm);
+    if (paymentMethod !== 'cod') return { success: false, message: 'Only "cod" and "upi_qr" are supported on Zepto.' };
     // Selecting the COD row reveals a "Pay ₹N on delivery" bar: that is the final click.
     const payBar = this.page.getByText(/^Pay ₹\d+ on delivery/).last();
 
@@ -493,5 +494,33 @@ export class ZeptoPlatform extends QuickCommercePlatform {
     await this.page.waitForLoadState('domcontentloaded').catch(() => {});
     const text = (await this.page.locator('body').innerText().catch(() => '')).replace(/\s+/g, ' ').slice(0, 200);
     return { success: true, message: `"Pay on delivery" clicked. Page now shows: ${text}` };
+  }
+
+  /** UPI via QR: step 2 click creates a pending order and shows a QR (valid ~3.5 min) that the user scans. */
+  private async placeQrOrder(confirm: boolean): Promise<any> {
+    const page = this.page!;
+    if (!confirm) {
+      this.armedTotal = undefined;
+      const preview = await this.getOrderPreview();
+      if (!preview) return { success: false, message: 'Could not reach checkout (empty cart?).' };
+      if (!preview.paymentMethods.includes('Pay via QR Code')) {
+        return { success: false, message: 'QR payment is not offered for this cart on Zepto.' };
+      }
+      this.armedTotal = preview.cart.total;
+      return { success: false, ready: true, total: preview.cart.total, message: 'QR payment available; stopped before selecting it.' };
+    }
+
+    if (this.armedTotal === undefined) return { success: false, message: 'Checkout is not armed; run the first step again.' };
+    const total = this.armedTotal;
+    this.armedTotal = undefined; // one shot
+    await page.getByText(/QR/i).first().click({ timeout: 5000 });
+    const valid = page.getByText(/QR code is valid for/i);
+    await valid.waitFor({ timeout: 15000 });
+    const card = page.getByText(/Scan and pay using any UPI app/i).first()
+      .locator('xpath=ancestor::div[.//canvas or .//img or .//svg][1]');
+    const image = await card.screenshot({ timeout: 5000 }).catch(() => page.screenshot());
+    // ponytail: expiry from page text; payment result not polled yet (success detection comes later).
+    const expiry = (await valid.locator('xpath=..').innerText().catch(() => '')).replace(/\s+/g, ' ');
+    return { success: true, image, message: `QR shown for ₹${total}. ${expiry}. Ask the user to scan it with any UPI app; an unpaid order stays pending until it expires.` };
   }
 }

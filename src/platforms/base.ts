@@ -215,6 +215,7 @@ export abstract class QuickCommercePlatform {
     ready?: boolean;
     total?: number;
     orderId?: string;
+    image?: Buffer; // e.g. a UPI QR the user must scan
     message: string;
   }>;
 

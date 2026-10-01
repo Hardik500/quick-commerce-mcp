@@ -1,13 +1,17 @@
 # 🛒 Quick Commerce MCP
 
-Universal quick commerce aggregation via MCP - compare and order from Zepto, Swiggy Instamart, and BigBasket in one interface.
+Universal quick commerce aggregation via MCP - compare and order from Zepto, Blinkit, and Swiggy Instamart in one interface.
 
 ## ✨ Features
 
 - **Multi-Platform Search**: Find products across all platforms simultaneously
 - **Price Comparison**: See which app has the best deal
 - **Smart Cart**: Automatically suggest optimal platform split
-- **User Control**: You confirm before any order is placed
+- **Item Resolution**: `resolve_items` ranks matches per platform; `add_to_cart` validates the cart (items, quantities, bill total) after adding
+- **Itemised Bill**: Handling, late-night, GST and other fees listed separately in cart and order preview
+- **Addresses**: `list_addresses` / `select_address` (retries once on flaky picker clicks)
+- **Store Notices**: Closed/unserviceable stores and "Add address to proceed" are detected and reported with next steps
+- **User Control**: Two-step `place_order` (preview token, then confirm); CVV read from `QC_CVV_<last4>`, never logged
 - **OTP Handling**: Prompts for OTP when session expires
 
 ## 🚀 Quick Start
@@ -35,9 +39,9 @@ npm run build
 
 | Platform | Search | Cart | Order | Notes |
 |----------|--------|------|-------|-------|
-| Zepto | ✅ | ✅ | 🚧 | Login + search + add/get/remove/clear cart verified end-to-end |
-| Blinkit | ✅ | ✅ | 🚧 | Login + search + add/get/remove/clear cart verified end-to-end |
-| Swiggy Instamart | ✅ | ✅ | 🚧 | Login + search + add/get/remove/clear cart verified end-to-end |
+| Zepto | ✅ | ✅ | 🚧 | Cart flow + validation + order preview verified live; payment untested |
+| Blinkit | ✅ | ✅ | 🚧 | Cart flow + validation verified live; full re-run and payment pending |
+| Swiggy Instamart | ✅ | ✅ | 🚧 | Cart flow + validation verified live; order preview success path untested (store was closed/unserviceable) |
 | BigBasket | 🚧 | 🚧 | 🚧 | Coming in v1.1 |
 
 See [AUTHENTICATION.md](AUTHENTICATION.md) for how to log in to a platform and save a session.
@@ -92,6 +96,8 @@ See [AUTHENTICATION.md](AUTHENTICATION.md) for how to log in to a platform and s
 - [x] Swiggy Instamart automation (login, search, add-to-cart, cart)
 - [x] Price comparison
 - [x] Basic cart management (add, get, remove, clear — verified on all 3 platforms)
+- [x] Cart validation, itemised bills, store-closed / no-address notices, address selection
+- [ ] Payment flows verified live (post-payment/3DS/OTP outcomes still guesses)
 
 ### v1.1
 - [ ] BigBasket support

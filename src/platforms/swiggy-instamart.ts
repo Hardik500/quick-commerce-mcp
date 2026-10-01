@@ -14,6 +14,31 @@ import {
 } from './base.js';
 import { sessionPath, ensureSessionDir } from '../session-helper.js';
 
+/**
+ * Instamart bill is one text line per cell: label, then "struck original, actual" or a single amount or "FREE"
+ * (e.g. "Handling Fee","₹12.83","₹12.00" / "Delivery Partner Fee","₹30.00","FREE"). Last amount is what's charged.
+ */
+export function parseInstamartBill(lines: string[]): { subtotal: number; total: number; fees: { label: string; amount: number }[] } {
+  const start = lines.findIndex(l => /^bill details$/i.test(l));
+  let subtotal = 0, total = 0;
+  const fees: { label: string; amount: number }[] = [];
+  let label = '', amounts: number[] = [], free = false;
+  const flush = () => {
+    if (!label || !amounts.length) return;
+    const amount = amounts[amounts.length - 1];
+    if (/^item total/i.test(label)) subtotal = amount;
+    else if (/^to pay/i.test(label)) total = amount;
+    else if (!free && amount) fees.push({ label, amount });
+  };
+  for (const l of lines.slice(start + 1)) {
+    if (/^₹/.test(l)) amounts.push(Number(l.replace(/[^\d.]/g, '')));
+    else if (/^free$/i.test(l)) free = true;
+    else { flush(); if (/^to pay/i.test(label)) break; label = l; amounts = []; free = false; }
+  }
+  flush();
+  return { subtotal, total, fees };
+}
+
 export class SwiggyInstamartPlatform extends QuickCommercePlatform {
   // Verified against the live site with an authenticated session
   // (scripts/test-instamart-addtocart.ts) on 2026-09-29. data-testids are used where
@@ -305,22 +330,17 @@ export class SwiggyInstamartPlatform extends QuickCommercePlatform {
       await this.openCart();
 
       const cartItems = await this.extractCartItems();
-      const subtotal = cartItems.reduce((sum, item) => sum + (item.price * item.cartQuantity), 0);
-
-      // Bill section is plain text: "Item Total | ₹17.00 | ... | To Pay | ₹88".
-      const toPay = await this.page.evaluate(() => {
-        const lines = document.body.innerText.split('\n').map(l => l.trim());
-        const i = lines.indexOf('To Pay');
-        return i >= 0 ? lines.slice(i + 1).find(l => l) || '' : '';
-      });
-      const total = toPay ? this.parsePrice(toPay) : subtotal;
+      const lines = await this.page.evaluate(() => document.body.innerText.split('\n').map(l => l.trim()).filter(Boolean));
+      const bill = parseInstamartBill(lines);
+      const subtotal = bill.subtotal || cartItems.reduce((sum, item) => sum + (item.price * item.cartQuantity), 0);
+      const total = bill.total || subtotal;
 
       return {
         platform: this.name,
         items: cartItems,
         subtotal,
-        // All fees combined (delivery, handling, small-cart, GST).
         deliveryFee: Math.max(0, total - subtotal),
+        fees: bill.fees,
         total,
       };
     } catch (error) {

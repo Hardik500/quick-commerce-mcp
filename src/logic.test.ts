@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import { unitPrice, relevant, rankByUnitPrice, resolveItem, validateCart } from './ranking.js';
 import { BlinkitPlatform, parseBill } from './platforms/blinkit.js';
 import { parseZeptoBill } from './platforms/zepto.js';
+import { parseInstamartBill } from './platforms/swiggy-instamart.js';
 import type { Product } from './platforms/base.js';
 
 const prod = (o: Partial<Product>): Product =>
@@ -78,4 +79,10 @@ test("parseZeptoBill: waived fees are 0, savings rows ignored", () => {
   const b = parseZeptoBill(["Yay! You saved ₹47 on this order", "Item Total ₹125 ₹123", "Delivery Fee ₹30", "Handling Fee ₹10 FREE", "Late Night Fee ₹35 FREE", "To Pay ₹200 ₹153", "Discount on MRP ₹2", "Savings on Handling fee ₹10"]);
   assert.equal(b.subtotal, 123); assert.equal(b.total, 153);
   assert.deepEqual(b.fees, [{ label: "Delivery Fee", amount: 30 }]);
+});
+
+test("parseInstamartBill: struck originals, FREE and rounding", () => {
+  const b = parseInstamartBill(["x", "BILL DETAILS", "Item Total", "₹121.00", "₹120.00", "Handling Fee", "₹12.83", "₹12.00", "Delivery Partner Fee", "₹30.00", "FREE", "Late Night Fee", "₹9.00", "₹5.00", "GST and Charges", "₹0.90", "To Pay", "₹173.73", "₹138", "tail"]);
+  assert.equal(b.subtotal, 120); assert.equal(b.total, 138);
+  assert.deepEqual(b.fees.map(f => f.amount), [12, 5, 0.9]);
 });

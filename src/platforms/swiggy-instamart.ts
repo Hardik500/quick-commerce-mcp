@@ -457,11 +457,36 @@ export class SwiggyInstamartPlatform extends QuickCommercePlatform {
     }
   }
 
-  async placeOrder(paymentMethod: string): Promise<any> {
-    console.log('Place order requires manual confirmation');
-    return {
-      success: false,
-      message: 'Order placement requires manual confirmation for safety',
-    };
+  private armedTotal?: number;
+
+  async placeOrder(paymentMethod: string, confirm = false): Promise<any> {
+    if (!this.page) throw new Error('Platform not initialized');
+    if (paymentMethod !== 'cod') return { success: false, message: 'Only "cod" is supported on Instamart.' };
+    // "Pay on Delivery" opens a sub-page whose single "Cash/Pay on Delivery" button is the final click.
+    const finalBtn = this.page.getByText(/^Cash\/Pay on Delivery$/).first();
+
+    if (!confirm) {
+      this.armedTotal = undefined;
+      const preview = await this.getOrderPreview();
+      if (!preview) return { success: false, message: 'Could not reach checkout (empty cart?).' };
+      if (!preview.paymentMethods.includes('Pay on Delivery')) {
+        return { success: false, message: 'Pay on Delivery is not offered for this cart on Instamart.' };
+      }
+      await this.page.getByText(/^Pay on Delivery$/).first().click({ timeout: 5000 });
+      await finalBtn.waitFor({ timeout: 8000 });
+      this.armedTotal = preview.cart.total;
+      return { success: false, ready: true, total: preview.cart.total, message: 'Pay on Delivery opened; stopped before the final click.' };
+    }
+
+    if (this.armedTotal === undefined) return { success: false, message: 'Checkout is not armed; run the first step again.' };
+    this.armedTotal = undefined; // one shot, even if the click fails
+    if (!(await finalBtn.isVisible().catch(() => false))) {
+      return { success: false, message: 'Checkout screen changed since the preview; nothing was charged. Run the first step again.' };
+    }
+    await finalBtn.click({ timeout: 5000 });
+    // ponytail: success signal not yet observed live; report page text for the caller to judge.
+    await this.page.waitForLoadState('domcontentloaded').catch(() => {});
+    const text = (await this.page.locator('body').innerText().catch(() => '')).replace(/\s+/g, ' ').slice(0, 200);
+    return { success: true, message: `"Cash/Pay on Delivery" clicked. Page now shows: ${text}` };
   }
 }

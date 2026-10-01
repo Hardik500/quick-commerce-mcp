@@ -151,11 +151,11 @@ const TOOLS: Tool[] = [
   },
   {
     name: 'place_order',
-    description: 'Place the current cart as a Cash on Delivery order (Blinkit only for now). Two steps: call without confirm_token to select Cash and get a summary + token (nothing is charged); call again with that token to place the order. ONLY pass the token after the user has explicitly approved the summary.',
+    description: 'Place the current cart as a Cash on Delivery order. Two steps: call without confirm_token to select Cash and get a summary + token (nothing is charged); call again with that token to place the order. ONLY pass the token after the user has explicitly approved the summary.',
     inputSchema: {
       type: 'object',
       properties: {
-        platform: { type: 'string', enum: ['blinkit'], description: 'Platform to order on' },
+        platform: { type: 'string', enum: ['zepto', 'swiggy', 'swiggy-instamart', 'blinkit'], description: 'Platform to order on' },
         payment_method: { type: 'string', enum: ['cod'], description: 'Payment method' },
         confirm_token: { type: 'string', description: 'Token returned by step 1; places the order' },
       },

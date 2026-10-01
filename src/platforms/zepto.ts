@@ -462,11 +462,36 @@ export class ZeptoPlatform extends QuickCommercePlatform {
     }
   }
 
-  async placeOrder(paymentMethod: string): Promise<any> {
-    console.log('Place order not yet implemented - requires user confirmation');
-    return {
-      success: false,
-      message: 'Order placement requires manual confirmation for safety',
-    };
+  private armedTotal?: number;
+
+  async placeOrder(paymentMethod: string, confirm = false): Promise<any> {
+    if (!this.page) throw new Error('Platform not initialized');
+    if (paymentMethod !== 'cod') return { success: false, message: 'Only "cod" is supported on Zepto.' };
+    // Selecting the COD row reveals a "Pay ₹N on delivery" bar: that is the final click.
+    const payBar = this.page.getByText(/^Pay ₹\d+ on delivery/).last();
+
+    if (!confirm) {
+      this.armedTotal = undefined;
+      const preview = await this.getOrderPreview();
+      if (!preview) return { success: false, message: 'Could not reach checkout (empty cart?).' };
+      if (!preview.paymentMethods.includes('Cash on Delivery')) {
+        return { success: false, message: 'Cash on Delivery is not offered for this cart on Zepto.' };
+      }
+      await this.page.locator('[class*="_cod-widget__row"]').first().click({ timeout: 5000 });
+      await payBar.waitFor({ timeout: 5000 });
+      this.armedTotal = preview.cart.total;
+      return { success: false, ready: true, total: preview.cart.total, message: 'COD selected; stopped before "Pay on delivery".' };
+    }
+
+    if (this.armedTotal === undefined) return { success: false, message: 'Checkout is not armed; run the first step again.' };
+    this.armedTotal = undefined; // one shot, even if the click fails
+    if (!(await payBar.isVisible().catch(() => false))) {
+      return { success: false, message: 'Checkout screen changed since the preview; nothing was charged. Run the first step again.' };
+    }
+    await payBar.click({ timeout: 5000 });
+    // ponytail: success signal not yet observed live; report page text for the caller to judge.
+    await this.page.waitForLoadState('domcontentloaded').catch(() => {});
+    const text = (await this.page.locator('body').innerText().catch(() => '')).replace(/\s+/g, ' ').slice(0, 200);
+    return { success: true, message: `"Pay on delivery" clicked. Page now shows: ${text}` };
   }
 }

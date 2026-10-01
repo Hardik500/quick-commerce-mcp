@@ -86,8 +86,6 @@ export class StealthBrowser {
       hasTouch: true,
       locale: 'en-IN',
       timezoneId: 'Asia/Kolkata',
-      geolocation: { latitude: 19.076, longitude: 72.8777 }, // Mumbai
-      permissions: ['geolocation'],
       colorScheme: 'light',
       reducedMotion: 'no-preference',
       forcedColors: 'none',

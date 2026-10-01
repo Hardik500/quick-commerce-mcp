@@ -417,6 +417,17 @@ export class SwiggyInstamartPlatform extends QuickCommercePlatform {
     return heading.locator('xpath=../following-sibling::div[1]/div');
   }
 
+  // Instamart only refreshes its lat/lng/address cookies on the next page load;
+  // without a reload the cart still uses the stale (e.g. Mumbai) location.
+  async selectAddress(addressId: string): Promise<boolean> {
+    const ok = await super.selectAddress(addressId);
+    if (ok) {
+      await this.page!.goto(this.baseUrl, { waitUntil: 'domcontentloaded', timeout: 30000 });
+      await this.page!.waitForTimeout(3000);
+    }
+    return ok;
+  }
+
   async getOrderPreview(): Promise<any> {
     const cart = await this.getCart();
     if (!cart) return null;

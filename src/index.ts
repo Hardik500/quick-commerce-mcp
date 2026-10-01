@@ -57,12 +57,12 @@ function rankByUnitPrice(products: Product[]): { p: Product; u: { value: number;
 }
 
 // Logged-in search on one platform; errors are returned, not thrown.
-async function searchOn(platformName: string, query: string, pincode?: string): Promise<SearchResult | { platform: string; error: string }> {
+async function searchOn(platformName: string, query: string): Promise<SearchResult | { platform: string; error: string }> {
   try {
     const platform = await getPlatform(platformName);
     const login = await platform.checkLogin();
     if (!login.loggedIn) return { platform: platformName, error: 'Not logged in' };
-    return await platform.search(query, pincode);
+    return await platform.search(query);
   } catch (error: any) {
     return { platform: platformName, error: error.message };
   }
@@ -77,7 +77,7 @@ const browsers: Map<string, StealthBrowser> = new Map();
 const TOOLS: Tool[] = [
   {
     name: 'search_products',
-    description: 'Search for products across quick commerce platforms (Zepto, Swiggy Instamart, Blinkit). When multiple platforms return results, includes a cheapest-first comparison by unit price.',
+    description: 'Search for products across quick commerce platforms (Zepto, Swiggy Instamart, Blinkit). When multiple platforms return results, includes a cheapest-first comparison by unit price. Uses each platform\'s current delivery address (see list_addresses / select_address).',
     inputSchema: {
       type: 'object',
       properties: {
@@ -89,10 +89,6 @@ const TOOLS: Tool[] = [
           type: 'array',
           items: { type: 'string', enum: ['zepto', 'swiggy', 'swiggy-instamart', 'blinkit', 'bigbasket', 'all'] },
           description: 'Platforms to search on. Use "all" to search all supported platforms.',
-        },
-        pincode: {
-          type: 'string',
-          description: 'Delivery pincode (optional - uses saved address if not provided)',
         },
       },
       required: ['query', 'platforms'],
@@ -322,7 +318,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
   try {
     switch (name) {
       case 'search_products': {
-        const { query, platforms: platformList, pincode } = args as any;
+        const { query, platforms: platformList } = args as any;
         const results = [];
 
         for (const platformName of resolvePlatforms(platformList)) {
@@ -350,7 +346,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
               };
             }
 
-            const searchResult = await platform.search(query, pincode);
+            const searchResult = await platform.search(query);
             results.push(searchResult);
           } catch (error: any) {
             results.push({

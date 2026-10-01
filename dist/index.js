@@ -51,13 +51,13 @@ function rankByUnitPrice(products) {
     return priced.filter(x => x.u.label === unit).sort((a, b) => a.u.value - b.u.value);
 }
 // Logged-in search on one platform; errors are returned, not thrown.
-async function searchOn(platformName, query, pincode) {
+async function searchOn(platformName, query) {
     try {
         const platform = await getPlatform(platformName);
         const login = await platform.checkLogin();
         if (!login.loggedIn)
             return { platform: platformName, error: 'Not logged in' };
-        return await platform.search(query, pincode);
+        return await platform.search(query);
     }
     catch (error) {
         return { platform: platformName, error: error.message };
@@ -71,7 +71,7 @@ const browsers = new Map();
 const TOOLS = [
     {
         name: 'search_products',
-        description: 'Search for products across quick commerce platforms (Zepto, Swiggy Instamart, Blinkit). When multiple platforms return results, includes a cheapest-first comparison by unit price.',
+        description: 'Search for products across quick commerce platforms (Zepto, Swiggy Instamart, Blinkit). When multiple platforms return results, includes a cheapest-first comparison by unit price. Uses each platform\'s current delivery address (see list_addresses / select_address).',
         inputSchema: {
             type: 'object',
             properties: {
@@ -83,10 +83,6 @@ const TOOLS = [
                     type: 'array',
                     items: { type: 'string', enum: ['zepto', 'swiggy', 'swiggy-instamart', 'blinkit', 'bigbasket', 'all'] },
                     description: 'Platforms to search on. Use "all" to search all supported platforms.',
-                },
-                pincode: {
-                    type: 'string',
-                    description: 'Delivery pincode (optional - uses saved address if not provided)',
                 },
             },
             required: ['query', 'platforms'],
@@ -304,7 +300,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
     try {
         switch (name) {
             case 'search_products': {
-                const { query, platforms: platformList, pincode } = args;
+                const { query, platforms: platformList } = args;
                 const results = [];
                 for (const platformName of resolvePlatforms(platformList)) {
                     try {
@@ -328,7 +324,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
                                 ],
                             };
                         }
-                        const searchResult = await platform.search(query, pincode);
+                        const searchResult = await platform.search(query);
                         results.push(searchResult);
                     }
                     catch (error) {

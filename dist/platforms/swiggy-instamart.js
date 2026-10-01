@@ -122,7 +122,7 @@ export class SwiggyInstamartPlatform extends QuickCommercePlatform {
         await this.context.storageState({ path: filePath });
         console.log('✅ Session saved to', filePath);
     }
-    async search(query, location) {
+    async search(query) {
         if (!this.page)
             throw new Error('Platform not initialized');
         if (!this.isLoggedIn) {

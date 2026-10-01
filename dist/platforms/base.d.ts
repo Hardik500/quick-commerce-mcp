@@ -70,7 +70,7 @@ export declare abstract class QuickCommercePlatform {
     /**
      * Search for products
      */
-    abstract search(query: string, location?: string): Promise<SearchResult>;
+    abstract search(query: string): Promise<SearchResult>;
     /**
      * Add product to cart
      */

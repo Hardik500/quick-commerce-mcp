@@ -171,16 +171,15 @@ export class BlinkitPlatform extends QuickCommercePlatform {
     console.log('✅ Session saved to', filePath);
   }
 
-  async search(query: string, location?: string): Promise<SearchResult> {
+  async search(query: string): Promise<SearchResult> {
     if (!this.page) throw new Error('Platform not initialized');
     if (!this.isLoggedIn) {
       throw new Error('Not logged in. Please login first.');
     }
 
     try {
-      // Delivery location comes from the saved session (set during login);
-      // the /s/?q= search page doesn't take a location override, so the
-      // `location` param is accepted for interface parity but unused here.
+      // Delivery location is the account's live address (change it with
+      // select_address); the /s/?q= page doesn't take a location override.
       await this.page.goto(`${this.baseUrl}/s/?q=${encodeURIComponent(query)}`, {
         waitUntil: 'domcontentloaded',
         timeout: 30000,

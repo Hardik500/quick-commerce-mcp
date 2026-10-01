@@ -136,7 +136,7 @@ export class ZeptoPlatform extends QuickCommercePlatform {
             return false;
         }
     }
-    async search(query, location) {
+    async search(query) {
         if (!this.page)
             throw new Error('Platform not initialized');
         if (!this.isLoggedIn) {

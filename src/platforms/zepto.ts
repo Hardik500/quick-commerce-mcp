@@ -174,7 +174,7 @@ export class ZeptoPlatform extends QuickCommercePlatform {
     }
   }
 
-  async search(query: string, location?: string): Promise<SearchResult> {
+  async search(query: string): Promise<SearchResult> {
     if (!this.page) throw new Error('Platform not initialized');
     if (!this.isLoggedIn) {
       throw new Error('Not logged in. Please login first.');

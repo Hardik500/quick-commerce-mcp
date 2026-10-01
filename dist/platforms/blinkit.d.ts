@@ -17,7 +17,7 @@ export declare class BlinkitPlatform extends QuickCommercePlatform {
     submitOtp(otp: string): Promise<boolean>;
     /** Persist cookies + localStorage so the next run starts already logged in. */
     saveSession(): Promise<void>;
-    search(query: string, location?: string): Promise<SearchResult>;
+    search(query: string): Promise<SearchResult>;
     private extractProductResults;
     private extractQuantity;
     addToCart(productId: string, quantity: number): Promise<boolean>;

@@ -22,7 +22,7 @@ export declare class ZeptoPlatform extends QuickCommercePlatform {
         phone?: string;
     }>;
     submitOtp(otp: string): Promise<boolean>;
-    search(query: string, location?: string): Promise<SearchResult>;
+    search(query: string): Promise<SearchResult>;
     private extractProductResults;
     private extractCardQuantity;
     private extractQuantity;

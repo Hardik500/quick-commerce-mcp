@@ -505,7 +505,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         const results = [];
         for (const item of items) {
           const success = await platform.addToCart(item.productId, item.quantity);
-          results.push({ name: item.name, success });
+          results.push({ name: item.name ?? item.productId, success });
         }
 
         let responseText = `✅ Added to cart on **${platformName.toUpperCase()}**:\n\n`;
@@ -648,10 +648,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
 
       case 'list_addresses': {
         const { platform: platformName } = args as any;
-        const platform = platforms.get(platformName);
-        if (!platform) {
-          return { content: [{ type: 'text', text: `❌ Platform not initialized. Search first.` }] };
-        }
+        const platform = await getPlatform(platformName);
         const addrs = await platform.getAddresses();
         const text = addrs.length
           ? addrs.map((a) => `[${a.id}] ${a.label}: ${a.addressLine1}${a.pincode ? ` (${a.pincode})` : ''}`).join('\n')
@@ -661,10 +658,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
 
       case 'select_address': {
         const { platform: platformName, address_id } = args as any;
-        const platform = platforms.get(platformName);
-        if (!platform) {
-          return { content: [{ type: 'text', text: `❌ Platform not initialized. Search first.` }] };
-        }
+        const platform = await getPlatform(platformName);
         const ok = await platform.selectAddress(String(address_id));
         return {
           content: [

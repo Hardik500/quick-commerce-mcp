@@ -490,15 +490,29 @@ export class BlinkitPlatform extends QuickCommercePlatform {
       // iframe (Zomato paykit). Nothing is charged until a method is confirmed.
       // The checkout list defaults to its first row and marks no selection, so
       // pick the row matching the address chosen via selectAddress (if any).
-      await this.page.getByText('Proceed', { exact: true }).last().click({ timeout: 8000 });
-      const all = this.page.locator('[class*="AddressList__AddressLists"] > *');
-      await all.first().waitFor({ timeout: 8000 });
-      const selected = this.selectedAddress;
-      const match = selected ? all.filter({ hasText: selected.addressLine1.split(',')[0] }).filter({ hasText: selected.label }) : all;
-      const row = (await match.count()) > 0 ? match.first() : all.first();
-      const address = (await row.innerText()).replace(/\s*\n\s*/g, ', ');
-      await row.click();
-      await this.page.getByText('Proceed To Pay', { exact: true }).last().click({ timeout: 10000 });
+      // If the cart already has an address attached, the footer shows
+      // "Delivering to X" + "Proceed To Pay" and skips the list.
+      const payBtn = this.page.getByText(/^Proceed To Pay/).last();
+      const proceed = this.page.getByText('Proceed', { exact: true }).last();
+      const first = await Promise.race([
+        proceed.waitFor({ timeout: 8000 }).then(() => 'list' as const),
+        payBtn.waitFor({ timeout: 8000 }).then(() => 'pay' as const),
+      ]).catch(() => null);
+      let address = '';
+      if (first === 'list') {
+        await proceed.click({ timeout: 8000 });
+        const all = this.page.locator('[class*="AddressList__AddressLists"] > *');
+        await all.first().waitFor({ timeout: 8000 });
+        const selected = this.selectedAddress;
+        const match = selected ? all.filter({ hasText: selected.addressLine1.split(',')[0] }).filter({ hasText: selected.label }) : all;
+        const row = (await match.count()) > 0 ? match.first() : all.first();
+        address = (await row.innerText()).replace(/\s*\n\s*/g, ', ');
+        await row.click();
+      } else if (first === 'pay') {
+        address = (await this.page.getByText(/Delivering to/).first().locator('xpath=../..').innerText({ timeout: 3000 }).catch(() => ''))
+          .replace(/\s*\n\s*/g, ', ').replace(/^.*?Delivering to,?\s*/, '').replace(/,?\s*Change.*$/, '');
+      }
+      await payBtn.click({ timeout: 10000 });
       const frameEl = this.page.locator('iframe[src*="zpaykit"]').first();
       await frameEl.waitFor({ timeout: 15000 });
       const frame = this.page.frameLocator('iframe[src*="zpaykit"]').first();

@@ -341,6 +341,9 @@ export class ZeptoPlatform extends QuickCommercePlatform {
                     .locator(this.selectors.cartItems)
                     .filter({ has: this.page.locator(this.selectors.cartItemName, { hasText: productId }) })
                     .first();
+                // First pass: the cart may still be rendering; wait for the row.
+                if (i === 0)
+                    await row.waitFor({ timeout: 5000 }).catch(() => { });
                 if ((await row.count()) === 0)
                     return i > 0;
                 await row.locator(this.selectors.cartItemMinus).click();

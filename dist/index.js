@@ -197,6 +197,22 @@ const TOOLS = [
         },
     },
     {
+        name: 'remove_from_cart',
+        description: 'Remove one product (all its quantity) from the cart on specified platform. Identify it by name (or a distinctive part of it) as shown in get_cart_summary; search product IDs do not match cart rows.',
+        inputSchema: {
+            type: 'object',
+            properties: {
+                platform: {
+                    type: 'string',
+                    enum: ['zepto', 'swiggy', 'swiggy-instamart', 'blinkit', 'bigbasket'],
+                    description: 'Platform to remove the item from',
+                },
+                item: { type: 'string', description: 'Item name as shown in get_cart_summary, e.g. "Amul Taaza Toned Milk"' },
+            },
+            required: ['platform', 'item'],
+        },
+    },
+    {
         name: 'clear_cart',
         description: 'Clear all items from cart on specified platform.',
         inputSchema: {
@@ -496,6 +512,26 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
                 text += `\n🔀 **Cheapest split across platforms**: ₹${splitTotal}\n`;
                 return {
                     content: [{ type: 'text', text }],
+                };
+            }
+            case 'remove_from_cart': {
+                const { platform: platformName, item } = args;
+                const platform = platforms.get(platformName);
+                if (!platform) {
+                    return {
+                        content: [{ type: 'text', text: `❌ Platform not initialized. Search first.` }],
+                    };
+                }
+                const removed = await platform.removeFromCart(item);
+                return {
+                    content: [
+                        {
+                            type: 'text',
+                            text: removed
+                                ? `✅ Removed "${item}" from ${platformName.toUpperCase()} cart`
+                                : `❌ Could not remove "${item}" (name not in cart?) on ${platformName.toUpperCase()}`,
+                        },
+                    ],
                 };
             }
             case 'clear_cart': {

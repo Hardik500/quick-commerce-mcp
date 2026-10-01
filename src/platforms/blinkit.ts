@@ -2,7 +2,7 @@
  * Blinkit (formerly Grofers) platform implementation
  * URL: https://blinkit.com
  */
-import { BrowserContext, Page } from 'playwright';
+import { BrowserContext, Locator, Page } from 'playwright';
 import {
   QuickCommercePlatform,
   Product,
@@ -466,15 +466,14 @@ export class BlinkitPlatform extends QuickCommercePlatform {
     }
   }
 
-  async getAddresses(): Promise<Address[]> {
-    // Would navigate to addresses section
-    console.log('Get addresses not yet fully implemented');
-    return [];
-  }
-
-  async selectAddress(addressId: string): Promise<boolean> {
-    console.log('Select address not yet fully implemented');
-    return false;
+  protected async openAddressPicker(): Promise<Locator> {
+    const page = this.page!;
+    await page.goto(this.baseUrl, { waitUntil: 'domcontentloaded', timeout: 30000 });
+    await page.waitForTimeout(4000);
+    await page.locator('[class*="LocationBar__Subtitle"]').first().click({ timeout: 8000, force: true });
+    const cards = page.locator('[class*="AddressListItem__AddressItemWrapperItem"]');
+    await cards.first().waitFor({ timeout: 8000 });
+    return cards;
   }
 
   async getOrderPreview(): Promise<any> {

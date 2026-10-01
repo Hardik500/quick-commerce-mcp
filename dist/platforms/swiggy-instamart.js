@@ -360,13 +360,14 @@ export class SwiggyInstamartPlatform extends QuickCommercePlatform {
             return false;
         }
     }
-    async getAddresses() {
-        console.log('Get addresses not yet implemented');
-        return [];
-    }
-    async selectAddress(addressId) {
-        console.log('Select address not yet implemented');
-        return false;
+    async openAddressPicker() {
+        const page = this.page;
+        await page.goto(this.baseUrl, { waitUntil: 'domcontentloaded', timeout: 30000 });
+        await page.waitForTimeout(4000);
+        await page.locator('[data-testid="address-name"]').first().click({ timeout: 8000, force: true });
+        const heading = page.getByText('Select from saved address', { exact: true }).first();
+        await heading.waitFor({ timeout: 8000 });
+        return heading.locator('xpath=../following-sibling::div[1]/div');
     }
     async getOrderPreview() {
         const cart = await this.getCart();

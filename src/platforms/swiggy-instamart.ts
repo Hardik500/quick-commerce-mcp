@@ -2,7 +2,7 @@
  * Swiggy Instamart implementation
  * URL: https://www.swiggy.com/instamart
  */
-import { BrowserContext, Page } from 'playwright';
+import { BrowserContext, Locator, Page } from 'playwright';
 import {
   QuickCommercePlatform,
   Product,
@@ -407,14 +407,14 @@ export class SwiggyInstamartPlatform extends QuickCommercePlatform {
     }
   }
 
-  async getAddresses(): Promise<Address[]> {
-    console.log('Get addresses not yet implemented');
-    return [];
-  }
-
-  async selectAddress(addressId: string): Promise<boolean> {
-    console.log('Select address not yet implemented');
-    return false;
+  protected async openAddressPicker(): Promise<Locator> {
+    const page = this.page!;
+    await page.goto(this.baseUrl, { waitUntil: 'domcontentloaded', timeout: 30000 });
+    await page.waitForTimeout(4000);
+    await page.locator('[data-testid="address-name"]').first().click({ timeout: 8000, force: true });
+    const heading = page.getByText('Select from saved address', { exact: true }).first();
+    await heading.waitFor({ timeout: 8000 });
+    return heading.locator('xpath=../following-sibling::div[1]/div');
   }
 
   async getOrderPreview(): Promise<any> {

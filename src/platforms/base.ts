@@ -2,7 +2,7 @@
  * Base platform interface for quick commerce automation
  * All platform implementations (Zepto, Swiggy, etc.) extend this
  */
-import { BrowserContext, Page } from 'playwright';
+import { BrowserContext, Locator, Page } from 'playwright';
 
 export interface Product {
   id: string;
@@ -103,14 +103,53 @@ export abstract class QuickCommercePlatform {
   abstract clearCart(): Promise<boolean>;
 
   /**
-   * Get available addresses
+   * Open the site's address picker and return a locator for the saved-address cards.
    */
-  abstract getAddresses(): Promise<Address[]>;
+  protected abstract openAddressPicker(): Promise<Locator>;
 
   /**
-   * Select delivery address
+   * Get saved addresses. `id` is the card's position in the picker.
    */
-  abstract selectAddress(addressId: string): Promise<boolean>;
+  async getAddresses(): Promise<Address[]> {
+    if (!this.page) return [];
+    try {
+      const cards = await this.openAddressPicker();
+      const texts = await cards.allInnerTexts();
+      await this.page.keyboard.press('Escape');
+      return texts.map((t, i) => {
+        const lines = t.split('\n').map((l) => l.trim()).filter(Boolean);
+        const line1 = lines.slice(1).join(', ');
+        return {
+          id: String(i),
+          label: lines[0] || '',
+          addressLine1: line1,
+          city: '',
+          pincode: line1.match(/\b\d{6}\b/)?.[0] || '',
+          phone: '',
+        };
+      });
+    } catch (error) {
+      console.error('Error getting addresses:', error);
+      return [];
+    }
+  }
+
+  /**
+   * Select delivery address by id from getAddresses().
+   */
+  async selectAddress(addressId: string): Promise<boolean> {
+    if (!this.page) return false;
+    try {
+      const cards = await this.openAddressPicker();
+      if (Number(addressId) >= (await cards.count())) return false;
+      await cards.nth(Number(addressId)).click();
+      await this.page.waitForTimeout(3000);
+      return true;
+    } catch (error) {
+      console.error('Error selecting address:', error);
+      return false;
+    }
+  }
 
   /**
    * Get final order preview (before payment)

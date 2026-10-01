@@ -375,14 +375,15 @@ export class ZeptoPlatform extends QuickCommercePlatform {
             return false;
         }
     }
-    async getAddresses() {
-        // Would navigate to address page and extract addresses
-        console.log('Get addresses not yet implemented');
-        return [];
-    }
-    async selectAddress(addressId) {
-        console.log('Select address not yet implemented');
-        return false;
+    async openAddressPicker() {
+        const page = this.page;
+        await page.goto(this.baseUrl, { waitUntil: 'domcontentloaded', timeout: 30000 });
+        await page.waitForTimeout(4000);
+        await page.keyboard.press('Escape'); // promo popups intercept the header click
+        await page.locator('[data-testid="user-address"]').first().click({ timeout: 8000 });
+        const cards = page.locator('[data-testid="address-item"]');
+        await cards.first().waitFor({ timeout: 8000 });
+        return cards;
     }
     async getOrderPreview() {
         const cart = await this.getCart();

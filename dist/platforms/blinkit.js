@@ -425,14 +425,14 @@ export class BlinkitPlatform extends QuickCommercePlatform {
             return false;
         }
     }
-    async getAddresses() {
-        // Would navigate to addresses section
-        console.log('Get addresses not yet fully implemented');
-        return [];
-    }
-    async selectAddress(addressId) {
-        console.log('Select address not yet fully implemented');
-        return false;
+    async openAddressPicker() {
+        const page = this.page;
+        await page.goto(this.baseUrl, { waitUntil: 'domcontentloaded', timeout: 30000 });
+        await page.waitForTimeout(4000);
+        await page.locator('[class*="LocationBar__Subtitle"]').first().click({ timeout: 8000, force: true });
+        const cards = page.locator('[class*="AddressListItem__AddressItemWrapperItem"]');
+        await cards.first().waitFor({ timeout: 8000 });
+        return cards;
     }
     async getOrderPreview() {
         const cart = await this.getCart();

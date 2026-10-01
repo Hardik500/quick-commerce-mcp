@@ -2,7 +2,7 @@
  * Base platform interface for quick commerce automation
  * All platform implementations (Zepto, Swiggy, etc.) extend this
  */
-import { BrowserContext, Page } from 'playwright';
+import { BrowserContext, Locator, Page } from 'playwright';
 export interface Product {
     id: string;
     name: string;
@@ -88,13 +88,17 @@ export declare abstract class QuickCommercePlatform {
      */
     abstract clearCart(): Promise<boolean>;
     /**
-     * Get available addresses
+     * Open the site's address picker and return a locator for the saved-address cards.
      */
-    abstract getAddresses(): Promise<Address[]>;
+    protected abstract openAddressPicker(): Promise<Locator>;
     /**
-     * Select delivery address
+     * Get saved addresses. `id` is the card's position in the picker.
      */
-    abstract selectAddress(addressId: string): Promise<boolean>;
+    getAddresses(): Promise<Address[]>;
+    /**
+     * Select delivery address by id from getAddresses().
+     */
+    selectAddress(addressId: string): Promise<boolean>;
     /**
      * Get final order preview (before payment)
      */

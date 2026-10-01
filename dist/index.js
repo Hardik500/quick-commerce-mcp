@@ -213,6 +213,29 @@ const TOOLS = [
         },
     },
     {
+        name: 'list_addresses',
+        description: 'List saved delivery addresses on a platform. Each has an id to pass to select_address.',
+        inputSchema: {
+            type: 'object',
+            properties: {
+                platform: { type: 'string', enum: ['zepto', 'swiggy', 'swiggy-instamart', 'blinkit'], description: 'Platform to query' },
+            },
+            required: ['platform'],
+        },
+    },
+    {
+        name: 'select_address',
+        description: 'Switch the delivery address on a platform (changes the live account address, and search results/stock). Use an id from list_addresses.',
+        inputSchema: {
+            type: 'object',
+            properties: {
+                platform: { type: 'string', enum: ['zepto', 'swiggy', 'swiggy-instamart', 'blinkit'], description: 'Platform to change' },
+                address_id: { type: 'string', description: 'Address id from list_addresses' },
+            },
+            required: ['platform', 'address_id'],
+        },
+    },
+    {
         name: 'clear_cart',
         description: 'Clear all items from cart on specified platform.',
         inputSchema: {
@@ -530,6 +553,36 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
                             text: removed
                                 ? `✅ Removed "${item}" from ${platformName.toUpperCase()} cart`
                                 : `❌ Could not remove "${item}" (name not in cart?) on ${platformName.toUpperCase()}`,
+                        },
+                    ],
+                };
+            }
+            case 'list_addresses': {
+                const { platform: platformName } = args;
+                const platform = platforms.get(platformName);
+                if (!platform) {
+                    return { content: [{ type: 'text', text: `❌ Platform not initialized. Search first.` }] };
+                }
+                const addrs = await platform.getAddresses();
+                const text = addrs.length
+                    ? addrs.map((a) => `[${a.id}] ${a.label}: ${a.addressLine1}${a.pincode ? ` (${a.pincode})` : ''}`).join('\n')
+                    : `❌ No saved addresses found on ${platformName.toUpperCase()} (logged in?)`;
+                return { content: [{ type: 'text', text }] };
+            }
+            case 'select_address': {
+                const { platform: platformName, address_id } = args;
+                const platform = platforms.get(platformName);
+                if (!platform) {
+                    return { content: [{ type: 'text', text: `❌ Platform not initialized. Search first.` }] };
+                }
+                const ok = await platform.selectAddress(String(address_id));
+                return {
+                    content: [
+                        {
+                            type: 'text',
+                            text: ok
+                                ? `✅ Delivery address on ${platformName.toUpperCase()} set to #${address_id}`
+                                : `❌ Could not select address #${address_id} on ${platformName.toUpperCase()} (bad id? run list_addresses)`,
                         },
                     ],
                 };

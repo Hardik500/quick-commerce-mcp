@@ -8,8 +8,8 @@
  *
  * Run: npx tsx src/session-helper.ts login zepto
  */
-import { BrowserContext } from 'playwright';
-import { QuickCommercePlatform, SearchResult, CartSummary, Address } from './base.js';
+import { BrowserContext, Locator } from 'playwright';
+import { QuickCommercePlatform, SearchResult, CartSummary } from './base.js';
 export declare class ZeptoPlatform extends QuickCommercePlatform {
     private selectors;
     constructor();
@@ -33,8 +33,7 @@ export declare class ZeptoPlatform extends QuickCommercePlatform {
     private extractCartItems;
     removeFromCart(productId: string): Promise<boolean>;
     clearCart(): Promise<boolean>;
-    getAddresses(): Promise<Address[]>;
-    selectAddress(addressId: string): Promise<boolean>;
+    protected openAddressPicker(): Promise<Locator>;
     getOrderPreview(): Promise<any>;
     placeOrder(paymentMethod: string): Promise<any>;
 }

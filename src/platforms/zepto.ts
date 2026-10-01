@@ -8,7 +8,7 @@
  * 
  * Run: npx tsx src/session-helper.ts login zepto
  */
-import { BrowserContext, ElementHandle, Page } from 'playwright';
+import { BrowserContext, ElementHandle, Locator, Page } from 'playwright';
 import {
   QuickCommercePlatform,
   Product,
@@ -428,15 +428,15 @@ export class ZeptoPlatform extends QuickCommercePlatform {
     }
   }
 
-  async getAddresses(): Promise<Address[]> {
-    // Would navigate to address page and extract addresses
-    console.log('Get addresses not yet implemented');
-    return [];
-  }
-
-  async selectAddress(addressId: string): Promise<boolean> {
-    console.log('Select address not yet implemented');
-    return false;
+  protected async openAddressPicker(): Promise<Locator> {
+    const page = this.page!;
+    await page.goto(this.baseUrl, { waitUntil: 'domcontentloaded', timeout: 30000 });
+    await page.waitForTimeout(4000);
+    await page.keyboard.press('Escape'); // promo popups intercept the header click
+    await page.locator('[data-testid="user-address"]').first().click({ timeout: 8000 });
+    const cards = page.locator('[data-testid="address-item"]');
+    await cards.first().waitFor({ timeout: 8000 });
+    return cards;
   }
 
   async getOrderPreview(): Promise<any> {

@@ -471,7 +471,13 @@ export class SwiggyInstamartPlatform extends QuickCommercePlatform {
 
     try {
       // 'Proceed to Pay' leads to /instamart/payment, which lists the methods.
-      await this.page.getByText(/^proceed to pay$/i).first().click({ timeout: 8000 });
+      if (await this.page.getByText(/currently unserviceable/i).count()) {
+        console.error('Instamart store is currently unserviceable for this address; no "Proceed to Pay" available.');
+        return null;
+      }
+      const proceed = () => this.page!.getByText(/proceed to pay/i).last().click({ timeout: 10000 });
+      // The bill/button renders after the cart items; if it never shows, reopen once and retry.
+      await proceed().catch(async () => { await this.openCart(); await proceed(); });
       await this.page.waitForURL(/payment/, { timeout: 15000 });
       await this.page.getByText(/UPI/i).first().waitFor({ timeout: 15000 });
       const text = await this.page.locator('body').innerText();

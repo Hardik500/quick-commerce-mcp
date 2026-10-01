@@ -471,6 +471,15 @@ export class BlinkitPlatform extends QuickCommercePlatform {
     return cards;
   }
 
+  private selectedAddress?: Address;
+
+  async selectAddress(addressId: string): Promise<boolean> {
+    const addr = (await this.getAddresses())[Number(addressId)];
+    const ok = await super.selectAddress(addressId);
+    if (ok) this.selectedAddress = addr;
+    return ok;
+  }
+
   async getOrderPreview(): Promise<OrderPreview | null> {
     if (!this.page) throw new Error('Platform not initialized');
     const cart = await this.getCart();
@@ -479,11 +488,16 @@ export class BlinkitPlatform extends QuickCommercePlatform {
     try {
       // Proceed -> saved-address list -> pick one -> Proceed To Pay -> payment
       // iframe (Zomato paykit). Nothing is charged until a method is confirmed.
+      // The checkout list defaults to its first row and marks no selection, so
+      // pick the row matching the address chosen via selectAddress (if any).
       await this.page.getByText('Proceed', { exact: true }).last().click({ timeout: 8000 });
-      const rows = this.page.locator('[class*="AddressList__AddressLists"] > *');
-      await rows.first().waitFor({ timeout: 8000 });
-      const address = (await rows.first().innerText()).replace(/\s*\n\s*/g, ', ');
-      await rows.first().click();
+      const all = this.page.locator('[class*="AddressList__AddressLists"] > *');
+      await all.first().waitFor({ timeout: 8000 });
+      const selected = this.selectedAddress;
+      const match = selected ? all.filter({ hasText: selected.addressLine1.split(',')[0] }).filter({ hasText: selected.label }) : all;
+      const row = (await match.count()) > 0 ? match.first() : all.first();
+      const address = (await row.innerText()).replace(/\s*\n\s*/g, ', ');
+      await row.click();
       await this.page.getByText('Proceed To Pay', { exact: true }).last().click({ timeout: 10000 });
       const frameEl = this.page.locator('iframe[src*="zpaykit"]').first();
       await frameEl.waitFor({ timeout: 15000 });

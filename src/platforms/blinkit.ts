@@ -321,13 +321,16 @@ export class BlinkitPlatform extends QuickCommercePlatform {
 
       await this.afterChange(() => addButton.click());
 
-      // Handle quantity increment if quantity > 1 (ADD button turns into a
-      // -/qty/+ stepper after the first click).
-      if (quantity > 1) {
-        for (let i = 1; i < quantity; i++) {
-          const incrementBtn = await product.waitForSelector(this.selectors.incrementButton, { timeout: 5000 }).catch(() => null);
-          if (incrementBtn) await this.afterChange(() => incrementBtn.click());
-        }
+      // The ADD button turns into a -/qty/+ stepper once the item is in the cart;
+      // if it doesn't (e.g. out of stock), the add failed.
+      const stepper = await product.waitForSelector(this.selectors.incrementButton, { timeout: 5000 }).catch(() => null);
+      if (!stepper) {
+        console.log('Item did not land in cart:', productId);
+        return false;
+      }
+      for (let i = 1; i < quantity; i++) {
+        const incrementBtn = await product.waitForSelector(this.selectors.incrementButton, { timeout: 5000 }).catch(() => null);
+        if (incrementBtn) await this.afterChange(() => incrementBtn.click());
       }
 
       return true;

@@ -291,12 +291,15 @@ export class ZeptoPlatform extends QuickCommercePlatform {
 
       await this.afterChange(() => addButton.click());
 
-      // Handle quantity if > 1
-      if (quantity > 1) {
-        for (let i = 1; i < quantity; i++) {
-          const incrementButton = await product.waitForSelector(this.selectors.incrementButton, { timeout: 5000 }).catch(() => null);
-          if (incrementButton) await this.afterChange(() => incrementButton.click());
-        }
+      // The ADD button turns into a stepper once the item is in the cart.
+      const stepper = await product.waitForSelector(this.selectors.incrementButton, { timeout: 5000 }).catch(() => null);
+      if (!stepper) {
+        console.log('Item did not land in cart:', productId);
+        return false;
+      }
+      for (let i = 1; i < quantity; i++) {
+        const incrementButton = await product.waitForSelector(this.selectors.incrementButton, { timeout: 5000 }).catch(() => null);
+        if (incrementButton) await this.afterChange(() => incrementButton.click());
       }
 
       return true;

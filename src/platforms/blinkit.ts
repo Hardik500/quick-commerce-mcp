@@ -510,18 +510,29 @@ export class BlinkitPlatform extends QuickCommercePlatform {
         payBtn.waitFor({ timeout: 8000 }).then(() => 'pay' as const),
       ]).catch(() => null);
       let address = '';
-      if (first === 'list') {
-        await proceed.click({ timeout: 8000 });
+      const selected = this.selectedAddress;
+      const wanted = selected?.addressLine1.split(',')[0];
+      const readFooter = async () =>
+        (await this.page!.getByText(/Delivering to/).first().locator('xpath=../..').innerText({ timeout: 3000 }).catch(() => ''))
+          .replace(/\s*\n\s*/g, ', ').replace(/^.*?Delivering to,?\s*/, '').replace(/,?\s*Change.*$/, '');
+      // The cart keeps the address from its last checkout, even after the header
+      // location changes, so a stale footer must be switched via "Change".
+      let useList = first === 'list';
+      if (first === 'pay') {
+        address = await readFooter();
+        if (wanted && !address.toLowerCase().includes(wanted.toLowerCase())) {
+          await this.page.getByText('Change', { exact: true }).last().click({ timeout: 5000 });
+          useList = true;
+        }
+      }
+      if (useList) {
+        if (first === 'list') await proceed.click({ timeout: 8000 });
         const all = this.page.locator('[class*="AddressList__AddressLists"] > *');
         await all.first().waitFor({ timeout: 8000 });
-        const selected = this.selectedAddress;
-        const match = selected ? all.filter({ hasText: selected.addressLine1.split(',')[0] }).filter({ hasText: selected.label }) : all;
+        const match = selected ? all.filter({ hasText: wanted! }).filter({ hasText: selected.label }) : all;
         const row = (await match.count()) > 0 ? match.first() : all.first();
         address = (await row.innerText()).replace(/\s*\n\s*/g, ', ');
         await row.click();
-      } else if (first === 'pay') {
-        address = (await this.page.getByText(/Delivering to/).first().locator('xpath=../..').innerText({ timeout: 3000 }).catch(() => ''))
-          .replace(/\s*\n\s*/g, ', ').replace(/^.*?Delivering to,?\s*/, '').replace(/,?\s*Change.*$/, '');
       }
       await payBtn.click({ timeout: 10000 });
       const frameEl = this.page.locator('iframe[src*="zpaykit"]').first();

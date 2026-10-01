@@ -118,13 +118,18 @@ export abstract class QuickCommercePlatform {
   /**
    * Get saved addresses. `id` is the card's position in the picker.
    */
+  // The picker may reorder cards by distance from the current location, so the
+  // first listing is cached to keep ids stable. ponytail: restart to pick up new addresses.
+  private addressCache?: Address[];
+
   async getAddresses(): Promise<Address[]> {
     if (!this.page) return [];
+    if (this.addressCache) return this.addressCache;
     try {
       const cards = await this.openAddressPicker();
       const texts = await cards.allInnerTexts();
       await this.page.keyboard.press('Escape');
-      return texts.map((t, i) => {
+      return (this.addressCache = texts.map((t, i) => {
         const lines = t.split('\n').map((l) => l.trim()).filter(Boolean);
         const line1 = lines.slice(1).join(', ');
         return {
@@ -135,7 +140,7 @@ export abstract class QuickCommercePlatform {
           pincode: line1.match(/\b\d{6}\b/)?.[0] || '',
           phone: '',
         };
-      });
+      }));
     } catch (error) {
       console.error('Error getting addresses:', error);
       return [];
@@ -161,9 +166,13 @@ export abstract class QuickCommercePlatform {
   async selectAddress(addressId: string): Promise<boolean> {
     if (!this.page) return false;
     try {
+      const target = (await this.getAddresses())[Number(addressId)];
+      if (!target) return false;
       const cards = await this.openAddressPicker();
-      if (Number(addressId) >= (await cards.count())) return false;
-      await cards.nth(Number(addressId)).click();
+      // Match by text, not position: card order changes with the current location.
+      const card = cards.filter({ hasText: target.addressLine1.split(',')[0] }).filter({ hasText: target.label }).first();
+      if ((await card.count()) === 0) return false;
+      await card.click();
       // Picker closes once the address is applied.
       await cards.first().waitFor({ state: 'hidden', timeout: 10000 }).catch(() => {});
       return true;

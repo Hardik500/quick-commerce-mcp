@@ -49,6 +49,14 @@ export interface Address {
   phone: string;
 }
 
+export interface OrderPreview {
+  cart: CartSummary;
+  /** Delivery address text as shown at checkout. */
+  address: string;
+  /** Payment options visible on the platform's payment screen. */
+  paymentMethods: string[];
+}
+
 export abstract class QuickCommercePlatform {
   protected name: string;
   protected baseUrl: string;
@@ -168,12 +176,23 @@ export abstract class QuickCommercePlatform {
   /**
    * Get final order preview (before payment)
    */
-  abstract getOrderPreview(): Promise<{
-    cart: CartSummary;
-    address: Address;
-    paymentMethods: string[];
-    walletBalance?: number;
-  } | null>;
+  abstract getOrderPreview(): Promise<OrderPreview | null>;
+
+  /** Known payment option labels, matched against the payment screen text. */
+  private static readonly PAYMENT_LABELS = [
+    'Google Pay', 'GPay', 'PhonePe', 'Paytm', 'BHIM', 'CRED', 'Amazon Pay', 'Mobikwik',
+    'LazyPay', 'Pluxee', 'Netbanking', 'Net Banking', 'Cash on Delivery', 'Pay on Delivery',
+    'Add New Card', 'Add credit or debit cards', 'Navi', 'Pay via QR Code', 'UPI',
+  ];
+
+  protected scanPaymentMethods(text: string): string[] {
+    const lower = text.toLowerCase();
+    const labels = QuickCommercePlatform.PAYMENT_LABELS.filter(l => lower.includes(l.toLowerCase()));
+    // Saved cards render as "HDFC Credit Card\n**** 9292".
+    const cards = [...text.matchAll(/([A-Za-z][A-Za-z ]*?(?:Credit|Debit) Card)\s*\*{2,4}\s*(\d{4})/g)]
+      .map(m => `${m[1].trim()} ••${m[2]}`);
+    return [...new Set([...labels, ...cards])];
+  }
 
   /**
    * Place order (requires explicit confirmation)

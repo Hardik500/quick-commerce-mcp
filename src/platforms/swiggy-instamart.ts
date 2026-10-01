@@ -8,6 +8,7 @@ import {
   Product,
   SearchResult,
   CartSummary,
+  OrderPreview,
   CartItem,
   Address,
 } from './base.js';
@@ -421,23 +422,35 @@ export class SwiggyInstamartPlatform extends QuickCommercePlatform {
   // Instamart only refreshes its lat/lng/address cookies on the next page load;
   // without a reload the cart still uses the stale (e.g. Mumbai) location.
   async selectAddress(addressId: string): Promise<boolean> {
+    // Reloading before the select-location POST completes aborts it and the
+    // old address sticks, so wait for that response first.
+    const saved = this.page!.waitForResponse(r => r.url().includes('select-location'), { timeout: 15000 }).catch(() => null);
     const ok = await super.selectAddress(addressId);
     if (ok) {
+      await saved;
       await this.page!.goto(this.baseUrl, { waitUntil: 'domcontentloaded', timeout: 30000 });
       await this.page!.waitForLoadState('networkidle', { timeout: 8000 }).catch(() => {});
     }
     return ok;
   }
 
-  async getOrderPreview(): Promise<any> {
+  async getOrderPreview(): Promise<OrderPreview | null> {
+    if (!this.page) throw new Error('Platform not initialized');
     const cart = await this.getCart();
-    if (!cart) return null;
+    if (!cart || cart.items.length === 0) return null;
 
-    return {
-      cart,
-      address: null,
-      paymentMethods: ['Wallet', 'UPI', 'Card'],
-    };
+    try {
+      // 'Proceed to Pay' leads to /instamart/payment, which lists the methods.
+      await this.page.getByText(/^proceed to pay$/i).first().click({ timeout: 8000 });
+      await this.page.waitForURL(/payment/, { timeout: 15000 });
+      await this.page.getByText(/UPI/i).first().waitFor({ timeout: 15000 });
+      const text = await this.page.locator('body').innerText();
+      const address = (await this.page.getByText(/delivering to|deliver to/i).first().innerText().catch(() => '')).replace(/\s*\n\s*/g, ' - ');
+      return { cart, address, paymentMethods: this.scanPaymentMethods(text) };
+    } catch (error) {
+      console.error('Error getting order preview:', error);
+      return null;
+    }
   }
 
   async placeOrder(paymentMethod: string): Promise<any> {

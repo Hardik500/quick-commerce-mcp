@@ -14,6 +14,7 @@ import {
   Product,
   SearchResult,
   CartSummary,
+  OrderPreview,
   CartItem,
   Address,
 } from './base.js';
@@ -438,15 +439,24 @@ export class ZeptoPlatform extends QuickCommercePlatform {
     return cards;
   }
 
-  async getOrderPreview(): Promise<any> {
+  async getOrderPreview(): Promise<OrderPreview | null> {
+    if (!this.page) throw new Error('Platform not initialized');
     const cart = await this.getCart();
-    if (!cart) return null;
+    if (!cart || cart.items.length === 0) return null;
 
-    return {
-      cart,
-      address: null, // Would extract from page
-      paymentMethods: ['Wallet', 'UPI', 'Card'],
-    };
+    try {
+      // The payment sheet is a panel on the cart page (not an iframe); its
+      // header carries the delivery address, followed by the payment options.
+      await this.page.getByText('PAYING VIA', { exact: false }).first().click({ timeout: 8000 });
+      await this.page.getByText('Pay by UPI').first().waitFor({ timeout: 10000 });
+      const lines = (await this.page.locator('body').innerText()).split('\n').map(l => l.trim()).filter(Boolean);
+      const at = lines.indexOf('Payment Options');
+      const address = at >= 0 ? lines[at + 1] ?? '' : '';
+      return { cart, address, paymentMethods: this.scanPaymentMethods(lines.join('\n')) };
+    } catch (error) {
+      console.error('Error getting order preview:', error);
+      return null;
+    }
   }
 
   async placeOrder(paymentMethod: string): Promise<any> {

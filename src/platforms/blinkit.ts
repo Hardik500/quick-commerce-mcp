@@ -8,6 +8,7 @@ import {
   Product,
   SearchResult,
   CartSummary,
+  OrderPreview,
   CartItem,
   Address,
 } from './base.js';
@@ -470,15 +471,30 @@ export class BlinkitPlatform extends QuickCommercePlatform {
     return cards;
   }
 
-  async getOrderPreview(): Promise<any> {
+  async getOrderPreview(): Promise<OrderPreview | null> {
+    if (!this.page) throw new Error('Platform not initialized');
     const cart = await this.getCart();
-    if (!cart) return null;
+    if (!cart || cart.items.length === 0) return null;
 
-    return {
-      cart,
-      address: null,
-      paymentMethods: ['Wallet', 'UPI', 'Card', 'Cash on Delivery'],
-    };
+    try {
+      // Proceed -> saved-address list -> pick one -> Proceed To Pay -> payment
+      // iframe (Zomato paykit). Nothing is charged until a method is confirmed.
+      await this.page.getByText('Proceed', { exact: true }).last().click({ timeout: 8000 });
+      const rows = this.page.locator('[class*="AddressList__AddressLists"] > *');
+      await rows.first().waitFor({ timeout: 8000 });
+      const address = (await rows.first().innerText()).replace(/\s*\n\s*/g, ', ');
+      await rows.first().click();
+      await this.page.getByText('Proceed To Pay', { exact: true }).last().click({ timeout: 10000 });
+      const frameEl = this.page.locator('iframe[src*="zpaykit"]').first();
+      await frameEl.waitFor({ timeout: 15000 });
+      const frame = this.page.frameLocator('iframe[src*="zpaykit"]').first();
+      await frame.getByText(/UPI/).first().waitFor({ timeout: 15000 });
+      const text = await frame.locator('body').innerText();
+      return { cart, address, paymentMethods: this.scanPaymentMethods(text) };
+    } catch (error) {
+      console.error('Error getting order preview:', error);
+      return null;
+    }
   }
 
   async placeOrder(paymentMethod: string): Promise<any> {

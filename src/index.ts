@@ -176,6 +176,21 @@ const TOOLS: Tool[] = [
     },
   },
   {
+    name: 'get_order_preview',
+    description: 'Preview the checkout for the current cart: items, bill, delivery address and available payment options. Does not place an order or charge anything.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        platform: {
+          type: 'string',
+          enum: ['zepto', 'swiggy', 'swiggy-instamart', 'blinkit'],
+          description: 'Platform to preview checkout on',
+        },
+      },
+      required: ['platform'],
+    },
+  },
+  {
     name: 'compare_prices',
     description: 'Compare prices for a shopping list across all platforms. Finds cheapest option and optimal split.',
     inputSchema: {
@@ -534,6 +549,32 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         return {
           content: [{ type: 'text', text: responseText }],
         };
+      }
+
+      case 'get_order_preview': {
+        const { platform: platformName } = args as any;
+        const platform = platforms.get(platformName);
+        if (!platform) {
+          return { content: [{ type: 'text', text: `❌ Platform not initialized. Search first.` }] };
+        }
+
+        const preview = await platform.getOrderPreview();
+        if (!preview) {
+          return {
+            content: [{ type: 'text', text: `❌ Could not build an order preview on ${platformName.toUpperCase()} (empty cart or checkout unavailable).` }],
+          };
+        }
+
+        const { cart } = preview;
+        let responseText = `🧾 **Order Preview - ${platformName.toUpperCase()}** (nothing has been charged)\n\n`;
+        for (const item of cart.items) {
+          responseText += `${item.cartQuantity}x ${item.name} - ₹${item.price * item.cartQuantity}\n`;
+        }
+        responseText += `\nSubtotal: ₹${cart.subtotal}\nFees: ₹${cart.deliveryFee}\n**To pay: ₹${cart.total}**\n`;
+        responseText += `\n📍 Deliver to: ${preview.address || 'unknown'}\n`;
+        responseText += `💳 Payment options: ${preview.paymentMethods.join(', ') || 'none detected'}`;
+
+        return { content: [{ type: 'text', text: responseText }] };
       }
 
       case 'compare_prices': {

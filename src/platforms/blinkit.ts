@@ -553,8 +553,10 @@ export class BlinkitPlatform extends QuickCommercePlatform {
         text += '\n' + (await frame.locator('body').innerText());
       }
       const paymentMethods = this.scanPaymentMethods(text);
-      // The "Cash" panel always carries a "not available below ₹50" note.
-      if (/^Cash$/m.test(text) && cart.total >= 50) paymentMethods.push('Cash on Delivery');
+      // The "Cash" panel always carries a "not available below ₹50" note, so
+      // trust its enabled state instead (it can be disabled for other reasons too).
+      const cash = frame.locator('[role="button"][aria-label="Cash"]').first();
+      if ((await cash.count()) && (await cash.getAttribute('aria-disabled')) !== 'true') paymentMethods.push('Cash on Delivery');
       return { cart, address, paymentMethods };
     } catch (error) {
       const body = await this.page.locator('body').innerText().catch(() => '');

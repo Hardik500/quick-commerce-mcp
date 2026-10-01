@@ -59,7 +59,7 @@ export class SwiggyInstamartPlatform extends QuickCommercePlatform {
     await this.page.setViewportSize({ width: 390, height: 844 });
 
     await this.page.goto(this.baseUrl, { waitUntil: 'domcontentloaded', timeout: 30000 });
-    await this.page.waitForTimeout(3000);
+    await this.page.waitForLoadState('load', { timeout: 15000 }).catch(() => {});
 
     await this.handleLocationPopup();
   }
@@ -71,7 +71,7 @@ export class SwiggyInstamartPlatform extends QuickCommercePlatform {
       const gps = await this.page.$(this.selectors.setGpsButton);
       if (gps) {
         await gps.click();
-        await this.page.waitForTimeout(2000);
+        await gps.waitForElementState('hidden', { timeout: 8000 }).catch(() => {});
       }
     } catch {
       // No popup, that's fine
@@ -119,11 +119,10 @@ export class SwiggyInstamartPlatform extends QuickCommercePlatform {
       // Controlled React input: fill() doesn't register, real keystrokes do.
       await otpInput.click();
       await this.page.keyboard.type(otp, { delay: 80 });
-      await this.page.waitForTimeout(1500);
 
       const verifyBtn = await this.page.$('button:has-text("VERIFY"), button:has-text("CONTINUE")');
       if (verifyBtn) await verifyBtn.click().catch(() => {});
-      await this.page.waitForTimeout(5000);
+      await this.page.locator(this.selectors.otpInput).first().waitFor({ state: 'hidden', timeout: 15000 }).catch(() => {});
 
       // Check if login succeeded
       const loginCheck = await this.checkLogin();
@@ -163,7 +162,7 @@ export class SwiggyInstamartPlatform extends QuickCommercePlatform {
 
       try {
         await this.page.waitForSelector(this.selectors.searchResults, { timeout: 15000 });
-        await this.page.waitForTimeout(1500);
+        await this.page.waitForLoadState('networkidle', { timeout: 5000 }).catch(() => {});
       } catch {
         console.log('No search results found');
       }
@@ -254,10 +253,12 @@ export class SwiggyInstamartPlatform extends QuickCommercePlatform {
       );
 
       await card.locator(this.selectors.addToCartButton).click();
-      await this.page.waitForTimeout(1500);
 
+      // Multi-variant products open a bottom sheet; single-variant ones turn
+      // into an inline stepper. Wait for the sheet, bounded.
       const sheet = this.page.locator(this.selectors.variantSheet);
-      if (await sheet.isVisible()) {
+      const sheetOpened = await sheet.waitFor({ state: 'visible', timeout: 2500 }).then(() => true, () => false);
+      if (sheetOpened) {
         // Pick the variant matching the card's price (the single-unit pack),
         // falling back to the first variant.
         const rows = sheet.locator(this.selectors.variantRow);
@@ -269,23 +270,22 @@ export class SwiggyInstamartPlatform extends QuickCommercePlatform {
             break;
           }
         }
-        await row.locator(this.selectors.stepperAdd).click();
-        await this.page.waitForTimeout(1000);
+        await this.afterChange(() => row.locator(this.selectors.stepperAdd).click());
         for (let i = 1; i < quantity; i++) {
-          await row.locator(this.selectors.stepperPlus).click();
-          await this.page.waitForTimeout(700);
+          await this.afterChange(() => row.locator(this.selectors.stepperPlus).click());
         }
         await sheet.locator(this.selectors.variantSheetClose).click();
-        await this.page.waitForTimeout(1000);
+        await sheet.waitFor({ state: 'hidden', timeout: 5000 }).catch(() => {});
       } else {
         // Single-variant: ADD turns into an inline stepper; the same
         // buttonpair-add element is the "+" button.
         for (let i = 1; i < quantity; i++) {
-          await card.locator(this.selectors.addToCartButton).click();
-          await this.page.waitForTimeout(700);
+          await this.afterChange(() => card.locator(this.selectors.addToCartButton).click());
         }
       }
 
+      // Let the add request reach the server before the caller navigates away.
+      await this.page.waitForLoadState('networkidle', { timeout: 8000 }).catch(() => {});
       return true;
     } catch (error) {
       console.error('Error adding to cart:', error);
@@ -364,7 +364,8 @@ export class SwiggyInstamartPlatform extends QuickCommercePlatform {
   private async openCart(): Promise<void> {
     if (!this.page) return;
     await this.page.goto(`${this.baseUrl}/cart`, { waitUntil: 'domcontentloaded', timeout: 30000 });
-    await this.page.waitForTimeout(4000);
+    await this.page.waitForLoadState('networkidle', { timeout: 8000 }).catch(() => {});
+    await this.page.locator(this.selectors.cartItems).first().waitFor({ timeout: 5000 }).catch(() => {});
   }
 
   async removeFromCart(productId: string): Promise<boolean> {
@@ -379,8 +380,8 @@ export class SwiggyInstamartPlatform extends QuickCommercePlatform {
           .filter({ has: this.page.locator(this.selectors.cartItemName, { hasText: productId }) })
           .first();
         if ((await row.count()) === 0) return i > 0;
-        await row.locator(this.selectors.stepperMinus).click();
-        await this.page.waitForTimeout(1500);
+        // dispatchEvent: a sibling "other items" container can overlay the button.
+        await this.afterChange(() => row.locator(this.selectors.stepperMinus).dispatchEvent('click'));
       }
       return false;
     } catch (error) {
@@ -395,10 +396,9 @@ export class SwiggyInstamartPlatform extends QuickCommercePlatform {
     try {
       await this.openCart();
       for (let i = 0; i < 100; i++) {
-        const minus = await this.page.$(`${this.selectors.cartItems} ${this.selectors.stepperMinus}`);
-        if (!minus) return true;
-        await minus.click();
-        await this.page.waitForTimeout(1500);
+        const minus = this.page.locator(`${this.selectors.cartItems} ${this.selectors.stepperMinus}`).first();
+        if ((await minus.count()) === 0) return true;
+        await this.afterChange(() => minus.dispatchEvent('click'));
       }
       return false;
     } catch (error) {
@@ -410,8 +410,9 @@ export class SwiggyInstamartPlatform extends QuickCommercePlatform {
   protected async openAddressPicker(): Promise<Locator> {
     const page = this.page!;
     await page.goto(this.baseUrl, { waitUntil: 'domcontentloaded', timeout: 30000 });
-    await page.waitForTimeout(4000);
-    await page.locator('[data-testid="address-name"]').first().click({ timeout: 8000, force: true });
+    const name = page.locator('[data-testid="address-name"]').first();
+    await name.waitFor({ timeout: 15000 });
+    await name.click({ timeout: 8000, force: true });
     const heading = page.getByText('Select from saved address', { exact: true }).first();
     await heading.waitFor({ timeout: 8000 });
     return heading.locator('xpath=../following-sibling::div[1]/div');
@@ -423,7 +424,7 @@ export class SwiggyInstamartPlatform extends QuickCommercePlatform {
     const ok = await super.selectAddress(addressId);
     if (ok) {
       await this.page!.goto(this.baseUrl, { waitUntil: 'domcontentloaded', timeout: 30000 });
-      await this.page!.waitForTimeout(3000);
+      await this.page!.waitForLoadState('networkidle', { timeout: 8000 }).catch(() => {});
     }
     return ok;
   }

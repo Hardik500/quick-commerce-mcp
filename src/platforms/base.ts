@@ -135,6 +135,19 @@ export abstract class QuickCommercePlatform {
   }
 
   /**
+   * Run a UI action (click) and wait until the page text changes, instead of
+   * sleeping a fixed time. Resolves anyway on timeout (action may be a no-op).
+   */
+  protected async afterChange(action: () => Promise<unknown>, timeout = 5000): Promise<void> {
+    const page = this.page!;
+    const before = await page.evaluate(() => document.body.innerText);
+    await action();
+    await page
+      .waitForFunction((b) => document.body.innerText !== b, before, { timeout })
+      .catch(() => {});
+  }
+
+  /**
    * Select delivery address by id from getAddresses().
    */
   async selectAddress(addressId: string): Promise<boolean> {
@@ -143,7 +156,8 @@ export abstract class QuickCommercePlatform {
       const cards = await this.openAddressPicker();
       if (Number(addressId) >= (await cards.count())) return false;
       await cards.nth(Number(addressId)).click();
-      await this.page.waitForTimeout(3000);
+      // Picker closes once the address is applied.
+      await cards.first().waitFor({ state: 'hidden', timeout: 10000 }).catch(() => {});
       return true;
     } catch (error) {
       console.error('Error selecting address:', error);

@@ -73,8 +73,7 @@ export class BlinkitPlatform extends QuickCommercePlatform {
     // Navigate to homepage
     await this.page.goto(this.baseUrl, { waitUntil: 'domcontentloaded', timeout: 30000 });
 
-    // Wait for page to stabilize
-    await this.page.waitForTimeout(2000);
+    await this.page.waitForLoadState('load', { timeout: 15000 }).catch(() => {});
 
     // Handle any initial popups (app-install interstitial, location prompt)
     await this.handleInitialPopups();
@@ -88,7 +87,7 @@ export class BlinkitPlatform extends QuickCommercePlatform {
       const continueOnWeb = await this.page.$(this.selectors.continueOnWebLink);
       if (continueOnWeb) {
         await continueOnWeb.click();
-        await this.page.waitForTimeout(1500);
+        await continueOnWeb.waitForElementState('hidden', { timeout: 5000 }).catch(() => {});
       }
 
       // "Select your location" modal - only appears if the session has no
@@ -96,7 +95,7 @@ export class BlinkitPlatform extends QuickCommercePlatform {
       const useLocationBtn = await this.page.$(this.selectors.useLocationButton);
       if (useLocationBtn) {
         await useLocationBtn.click();
-        await this.page.waitForTimeout(2000);
+        await useLocationBtn.waitForElementState('hidden', { timeout: 8000 }).catch(() => {});
       }
     } catch {
       // Popups might not appear, that's fine
@@ -148,7 +147,7 @@ export class BlinkitPlatform extends QuickCommercePlatform {
       // auto-advances focus through the rest (see scripts/auto-login-blinkit.ts).
       await otpInput.click();
       await this.page.keyboard.type(otp);
-      await this.page.waitForTimeout(3000);
+      await this.page.locator(this.selectors.otpInput).first().waitFor({ state: 'hidden', timeout: 15000 }).catch(() => {});
 
       const loginCheck = await this.checkLogin();
       if (loginCheck.loggedIn) {
@@ -319,18 +318,14 @@ export class BlinkitPlatform extends QuickCommercePlatform {
         return false;
       }
 
-      await addButton.click();
-      await this.page.waitForTimeout(1000);
+      await this.afterChange(() => addButton.click());
 
       // Handle quantity increment if quantity > 1 (ADD button turns into a
       // -/qty/+ stepper after the first click).
       if (quantity > 1) {
         for (let i = 1; i < quantity; i++) {
-          const incrementBtn = await product.$(this.selectors.incrementButton);
-          if (incrementBtn) {
-            await incrementBtn.click();
-            await this.page.waitForTimeout(500);
-          }
+          const incrementBtn = await product.waitForSelector(this.selectors.incrementButton, { timeout: 5000 }).catch(() => null);
+          if (incrementBtn) await this.afterChange(() => incrementBtn.click());
         }
       }
 
@@ -344,7 +339,8 @@ export class BlinkitPlatform extends QuickCommercePlatform {
   private async openCart(): Promise<void> {
     if (!this.page) return;
     await this.page.goto(`${this.baseUrl}/cart`, { waitUntil: 'domcontentloaded', timeout: 30000 });
-    await this.page.waitForTimeout(3000);
+    await this.page.waitForLoadState('networkidle', { timeout: 8000 }).catch(() => {});
+    await this.page.locator(this.selectors.cartItems).first().waitFor({ timeout: 5000 }).catch(() => {});
   }
 
   async getCart(): Promise<CartSummary | null> {
@@ -437,8 +433,7 @@ export class BlinkitPlatform extends QuickCommercePlatform {
         // First pass: the drawer may still be rendering; wait for the row.
         if (i === 0) await row.waitFor({ timeout: 5000 }).catch(() => {});
         if ((await row.count()) === 0) return i > 0;
-        await row.locator(this.selectors.cartStepperMinus).click();
-        await this.page.waitForTimeout(1000);
+        await this.afterChange(() => row.locator(this.selectors.cartStepperMinus).click());
       }
       return false;
     } catch (error) {
@@ -453,10 +448,9 @@ export class BlinkitPlatform extends QuickCommercePlatform {
     try {
       await this.openCart();
       for (let i = 0; i < 100; i++) {
-        const minus = await this.page.$(`${this.selectors.cartItems} ${this.selectors.cartStepperMinus}`);
-        if (!minus) return true;
-        await minus.click();
-        await this.page.waitForTimeout(1000);
+        const minus = this.page.locator(`${this.selectors.cartItems} ${this.selectors.cartStepperMinus}`).first();
+        if ((await minus.count()) === 0) return true;
+        await this.afterChange(() => minus.click());
       }
       return false;
     } catch (error) {
@@ -468,8 +462,9 @@ export class BlinkitPlatform extends QuickCommercePlatform {
   protected async openAddressPicker(): Promise<Locator> {
     const page = this.page!;
     await page.goto(this.baseUrl, { waitUntil: 'domcontentloaded', timeout: 30000 });
-    await page.waitForTimeout(4000);
-    await page.locator('[class*="LocationBar__Subtitle"]').first().click({ timeout: 8000, force: true });
+    const bar = page.locator('[class*="LocationBar__Subtitle"]').first();
+    await bar.waitFor({ timeout: 15000 });
+    await bar.click({ timeout: 8000, force: true });
     const cards = page.locator('[class*="AddressListItem__AddressItemWrapperItem"]');
     await cards.first().waitFor({ timeout: 8000 });
     return cards;

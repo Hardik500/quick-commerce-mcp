@@ -84,8 +84,7 @@ export class ZeptoPlatform extends QuickCommercePlatform {
       console.error('   npx tsx src/session-helper.ts login zepto');
     }
     
-    // Wait for initial load
-    await this.page.waitForTimeout(2000);
+    await this.page.waitForLoadState('load', { timeout: 15000 }).catch(() => {});
     
     // Check for blocked page
     const blockedEl = await this.page.$(this.selectors.blockedPage);
@@ -159,7 +158,7 @@ export class ZeptoPlatform extends QuickCommercePlatform {
       const verifyButton = await this.page.$('button:has-text("Verify"), button:has-text("Submit")');
       if (verifyButton) {
         await verifyButton.click();
-        await this.page.waitForTimeout(3000);
+        await this.page.locator(this.selectors.otpInput).first().waitFor({ state: 'hidden', timeout: 15000 }).catch(() => {});
       }
 
       // Check if login succeeded
@@ -289,17 +288,13 @@ export class ZeptoPlatform extends QuickCommercePlatform {
         return false;
       }
 
-      await addButton.click();
-      await this.page.waitForTimeout(1000);
+      await this.afterChange(() => addButton.click());
 
       // Handle quantity if > 1
       if (quantity > 1) {
         for (let i = 1; i < quantity; i++) {
-          const incrementButton = await product.$(this.selectors.incrementButton);
-          if (incrementButton) {
-            await incrementButton.click();
-            await this.page.waitForTimeout(500);
-          }
+          const incrementButton = await product.waitForSelector(this.selectors.incrementButton, { timeout: 5000 }).catch(() => null);
+          if (incrementButton) await this.afterChange(() => incrementButton.click());
         }
       }
 
@@ -313,7 +308,12 @@ export class ZeptoPlatform extends QuickCommercePlatform {
   private async openCart(): Promise<void> {
     if (!this.page) return;
     await this.page.goto(`${this.baseUrl}/cart`, { waitUntil: 'domcontentloaded', timeout: 30000 });
-    await this.page.waitForTimeout(3000);
+    // Cart is ready once either a row or the bill summary renders.
+    await this.page
+      .locator(`${this.selectors.cartItems}, ${this.selectors.billToPay}`)
+      .first()
+      .waitFor({ timeout: 10000 })
+      .catch(() => {});
   }
 
   // Bill rows can hold a strikethrough original price alongside the final
@@ -400,8 +400,7 @@ export class ZeptoPlatform extends QuickCommercePlatform {
         // First pass: the cart may still be rendering; wait for the row.
         if (i === 0) await row.waitFor({ timeout: 5000 }).catch(() => {});
         if ((await row.count()) === 0) return i > 0;
-        await row.locator(this.selectors.cartItemMinus).click();
-        await this.page.waitForTimeout(1000);
+        await this.afterChange(() => row.locator(this.selectors.cartItemMinus).click());
       }
       return false;
     } catch (error) {
@@ -416,10 +415,9 @@ export class ZeptoPlatform extends QuickCommercePlatform {
     try {
       await this.openCart();
       for (let i = 0; i < 100; i++) {
-        const minus = await this.page.$(`${this.selectors.cartItems} ${this.selectors.cartItemMinus}`);
-        if (!minus) return true;
-        await minus.click();
-        await this.page.waitForTimeout(1000);
+        const minus = this.page.locator(`${this.selectors.cartItems} ${this.selectors.cartItemMinus}`).first();
+        if ((await minus.count()) === 0) return true;
+        await this.afterChange(() => minus.click());
       }
       return false;
     } catch (error) {
@@ -431,9 +429,10 @@ export class ZeptoPlatform extends QuickCommercePlatform {
   protected async openAddressPicker(): Promise<Locator> {
     const page = this.page!;
     await page.goto(this.baseUrl, { waitUntil: 'domcontentloaded', timeout: 30000 });
-    await page.waitForTimeout(4000);
+    const header = page.locator('[data-testid="user-address"]').first();
+    await header.waitFor({ timeout: 15000 });
     await page.keyboard.press('Escape'); // promo popups intercept the header click
-    await page.locator('[data-testid="user-address"]').first().click({ timeout: 8000 });
+    await header.click({ timeout: 8000 });
     const cards = page.locator('[data-testid="address-item"]');
     await cards.first().waitFor({ timeout: 8000 });
     return cards;

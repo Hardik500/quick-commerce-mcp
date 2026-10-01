@@ -527,8 +527,14 @@ export class ZeptoPlatform extends QuickCommercePlatform {
     const { label, cvv } = this.armedCard;
     this.armedTotal = undefined; this.armedCard = undefined; // one shot
     await page.getByText(label.split(' ••')[0], { exact: false }).first().click({ timeout: 5000 });
-    const cvvInput = page.frameLocator('iframe[src*="juspay"]').locator('input[name="security_code"]');
-    await cvvInput.waitFor({ timeout: 15000 });
+    // The "Make Payment" button appears once the card sheet (and its juspay iframes) is attached.
+    // Only one of the iframes holds the CVV field, so wait on whichever frame renders it.
+    await page.getByText('Make Payment', { exact: true }).first().waitFor({ timeout: 20000 });
+    const cvvInput = await Promise.any(page.frames().map(async f => {
+      const l = f.locator('input[name="security_code"]');
+      await l.waitFor({ timeout: 15000 });
+      return l;
+    }));
     await cvvInput.fill(cvv);
     await page.getByText('Make Payment', { exact: true }).first().click({ timeout: 5000 });
     // ponytail: post-payment page (3DS/OTP/success) not observed yet; report what shows.

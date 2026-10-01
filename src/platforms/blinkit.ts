@@ -198,16 +198,18 @@ export class BlinkitPlatform extends QuickCommercePlatform {
     try {
       // Delivery location is the account's live address (change it with
       // select_address); the /s/?q= page doesn't take a location override.
-      await this.page.goto(`${this.baseUrl}/s/?q=${encodeURIComponent(query)}`, {
-        waitUntil: 'domcontentloaded',
-        timeout: 30000,
-      });
-
       // Results render after a skeleton that can outlast a fixed delay on a
-      // cold page; a timeout here just means no results.
-      await this.page.waitForSelector(this.selectors.productName, { timeout: 15000 }).catch(() => {});
-
-      const products = await this.extractProductResults();
+      // cold page; a timeout just means no results yet, so retry once with a
+      // fresh navigation before reporting an empty list.
+      let products: Product[] = [];
+      for (let attempt = 0; attempt < 2 && products.length === 0; attempt++) {
+        await this.page.goto(`${this.baseUrl}/s/?q=${encodeURIComponent(query)}`, {
+          waitUntil: 'domcontentloaded',
+          timeout: 30000,
+        });
+        await this.page.waitForSelector(this.selectors.productName, { timeout: 15000 }).catch(() => {});
+        products = await this.extractProductResults();
+      }
 
       return {
         query,

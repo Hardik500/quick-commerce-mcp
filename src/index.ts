@@ -519,11 +519,14 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
 
         const results = [];
         for (const item of items) {
+          // addToCart clicks the product card on the current page, so bring the card up first.
+          if (item.name) await platform.search(item.name).catch(() => null);
           const success = await platform.addToCart(item.productId, item.quantity);
           results.push({ name: item.name ?? item.productId, success });
         }
 
-        let responseText = `✅ Added to cart on **${platformName.toUpperCase()}**:\n\n`;
+        const failed = results.filter(r => !r.success).length;
+        let responseText = `${failed ? '⚠️' : '✅'} Added to cart on **${platformName.toUpperCase()}**${failed ? ` (${failed} of ${results.length} failed)` : ''}:\n\n`;
         for (const result of results) {
           responseText += result.success ? `✓ ${result.name}\n` : `✗ ${result.name} (failed)\n`;
         }
@@ -773,12 +776,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           };
         }
 
-        const platform = platforms.get(platformName);
-        if (!platform) {
-          return {
-            content: [{ type: 'text', text: `❌ Platform not initialized.` }],
-          };
-        }
+        const platform = await getPlatform(platformName);
 
         const success = await platform.clearCart();
         

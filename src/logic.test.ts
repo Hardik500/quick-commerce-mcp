@@ -86,3 +86,9 @@ test("parseInstamartBill: struck originals, FREE and rounding", () => {
   assert.equal(b.subtotal, 120); assert.equal(b.total, 138);
   assert.deepEqual(b.fees.map(f => f.amount), [12, 5, 0.9]);
 });
+
+test("resolveItem: brand footer after | does not trigger synonym match", () => {
+  const mk = (id: string, name: string) => ({ id, name, price: 38, quantity: "750 ml", inStock: true }) as any;
+  const r = resolveItem("coke zero", [mk("1", "Sprite Zero | Lemon-Lime | The Coca-Cola Company"), mk("2", "Coca-Cola Zero Sugar PET| Cola | The Coca-Cola Company")]);
+  assert.equal(r.status, "match"); assert.deepEqual(r.options.map(o => o.id), ["2"]);
+});

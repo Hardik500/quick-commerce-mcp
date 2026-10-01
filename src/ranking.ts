@@ -41,7 +41,7 @@ export function resolveItem(query: string, products: Product[], max = 5): Resolu
   const words = query.toLowerCase().split(/\s+/).filter(w => w.length > 1).map(w => w.replace(/s$/, ''));
   const seen = new Set<string>();
   products = products.filter(p => { const k = `${p.name}|${p.quantity}`; return !seen.has(k) && !!seen.add(k); });
-  const scored = products.map(p => ({ p, n: words.filter(w => hits(p.name.toLowerCase(), w)).length }));
+  const scored = products.map(p => ({ p, n: words.filter(w => hits(p.name.toLowerCase().split('|')[0], w)).length })); // title only: Zepto names end with "| The Coca-Cola Company"
   const exact = scored.filter(x => x.n === words.length);
   const byPrice = (a: { p: Product }, b: { p: Product }) => unitPrice(a.p).value - unitPrice(b.p).value;
   const exactIn = exact.filter(x => x.p.inStock).sort(byPrice).map(x => x.p);

@@ -400,6 +400,12 @@ export class SwiggyInstamartPlatform extends QuickCommercePlatform {
 
     try {
       await this.openCart();
+      // Unavailable items sit outside the stepper list and block checkout; "Remove all" drops them.
+      const removeAll = this.page.getByText('Remove all', { exact: true }).first();
+      if (await removeAll.isVisible().catch(() => false)) {
+        await removeAll.click({ timeout: 5000 });
+        await this.page.getByText(/items? unavailable/i).first().waitFor({ state: 'hidden', timeout: 5000 }).catch(() => {});
+      }
       for (let i = 0; i < 100; i++) {
         const minus = this.page.locator(`${this.selectors.cartItems} ${this.selectors.stepperMinus}`).first();
         if ((await minus.count()) === 0) return true;

@@ -63,7 +63,7 @@ export function rankByUnitPrice(products: Product[]): { p: Product; u: { value: 
 
 // Store-closed / unserviceable banners shown on cart pages.
 export function storeNotice(pageText: string): string | undefined {
-  const m = pageText.match(/[^\n]*(currently unserviceable|store (is )?(currently )?closed|not accepting orders|currently unavailable|no longer delivering)[^\n]*/i);
+  const m = pageText.match(/[^\n]*(currently (unserviceable|closed)|store (is )?(currently )?closed|not accepting orders|add address to proceed|currently unavailable|no longer delivering)[^\n]*/i);
   return m?.[0].trim();
 }
 

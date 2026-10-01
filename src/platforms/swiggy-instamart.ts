@@ -287,7 +287,11 @@ export class SwiggyInstamartPlatform extends QuickCommercePlatform {
 
       // Let the add request reach the server before the caller navigates away.
       await this.page.waitForLoadState('networkidle', { timeout: 8000 }).catch(() => {});
-      return true;
+
+      // The card shows a quantity counter once the item is in the cart.
+      const landed = await card.locator('[data-testid="buttonpair-count"]').waitFor({ state: 'visible', timeout: 5000 }).then(() => true, () => false);
+      if (!landed) console.log('Item did not land in cart:', productId);
+      return landed;
     } catch (error) {
       console.error('Error adding to cart:', error);
       return false;

@@ -21,6 +21,11 @@ export class QuickCommercePlatform {
     getName() {
         return this.name;
     }
+    /** Extract numeric value from price text like "₹45", "Rs. 45", "45.00". */
+    parsePrice(priceText) {
+        const match = priceText.match(/[₹Rs.]?\s*(\d+(?:\.\d{2})?)/);
+        return match ? parseFloat(match[1]) : 0;
+    }
     isAuthenticated() {
         return this.isLoggedIn;
     }

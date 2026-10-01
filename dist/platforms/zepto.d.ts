@@ -24,7 +24,6 @@ export declare class ZeptoPlatform extends QuickCommercePlatform {
     submitOtp(otp: string): Promise<boolean>;
     search(query: string, location?: string): Promise<SearchResult>;
     private extractProductResults;
-    private parsePrice;
     private extractCardQuantity;
     private extractQuantity;
     addToCart(productId: string, quantity: number): Promise<boolean>;

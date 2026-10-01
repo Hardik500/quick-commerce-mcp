@@ -229,11 +229,6 @@ export class SwiggyInstamartPlatform extends QuickCommercePlatform {
     return products;
   }
 
-  private parsePrice(priceText: string): number {
-    const match = priceText.match(/[₹Rs.]?\s*(\d+(?:\.\d{2})?)/);
-    return match ? parseFloat(match[1]) : 0;
-  }
-
   private extractQuantity(name: string): string {
     const match = name.match(/(\d+\s*(?:ml|L|g|kg|pcs|pack))/i);
     return match ? match[1] : '1 unit';

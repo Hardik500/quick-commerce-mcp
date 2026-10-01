@@ -117,6 +117,8 @@ export declare abstract class QuickCommercePlatform {
      */
     close(): Promise<void>;
     getName(): string;
+    /** Extract numeric value from price text like "₹45", "Rs. 45", "45.00". */
+    protected parsePrice(priceText: string): number;
     isAuthenticated(): boolean;
 }
 //# sourceMappingURL=base.d.ts.map

@@ -296,12 +296,6 @@ export class BlinkitPlatform extends QuickCommercePlatform {
     return products;
   }
 
-  private parsePrice(priceText: string): number {
-    // Extract numeric value from strings like "₹45", "₹ 45.00", "Rs 45"
-    const match = priceText.match(/[₹Rs.]?\s*(\d+(?:\.\d{2})?)/i);
-    return match ? parseFloat(match[1]) : 0;
-  }
-
   private extractQuantity(name: string): string {
     // Extract quantity info from name like "Amul Milk 1L", "Lays Chips 52g"
     const match = name.match(/(\d+(?:\.\d+)?\s*(?:ml|L|g|kg|pcs|pack|bottle|can)s?)/i);

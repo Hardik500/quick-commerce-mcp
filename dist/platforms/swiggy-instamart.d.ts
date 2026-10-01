@@ -19,7 +19,6 @@ export declare class SwiggyInstamartPlatform extends QuickCommercePlatform {
     saveSession(): Promise<void>;
     search(query: string, location?: string): Promise<SearchResult>;
     private extractProductResults;
-    private parsePrice;
     private extractQuantity;
     addToCart(productId: string, quantity: number): Promise<boolean>;
     getCart(): Promise<CartSummary | null>;

@@ -258,12 +258,6 @@ export class ZeptoPlatform extends QuickCommercePlatform {
     return products;
   }
 
-  private parsePrice(priceText: string): number {
-    // Extract numeric value from price text like "₹45", "Rs. 45", "45.00"
-    const match = priceText.match(/[₹Rs.]?\s*(\d+(?:\.\d{2})?)/);
-    return match ? parseFloat(match[1]) : 0;
-  }
-
   // Pack size ("1 pack (250 ml)") is the card line right after the name.
   private async extractCardQuantity(card: ElementHandle, name: string): Promise<string> {
     const lines = (await card.innerText()).split('\n').map(l => l.trim());

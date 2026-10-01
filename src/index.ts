@@ -497,15 +497,11 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         if (!confirm) {
           // Preview mode
           let previewText = `🛒 Cart Preview for **${platformName.toUpperCase()}**\n\n`;
-          let total = 0;
 
-          for (const item of items) {
-            previewText += `- ${item.quantity}x ${item.name}\n`;
-            // Price would come from cache or search
-            total += item.quantity * 40; // Placeholder
-          }
+          for (const item of items) previewText += `- ${item.quantity}x ${item.name ?? item.productId}\n`;
 
-          previewText += `\n**Estimated Total: ₹${total}**\n\n`;
+          // No price is shown here: the real prices and fees only exist once items are in the cart.
+          previewText += `\nPrices and fees are shown after adding (nothing is charged by adding to cart).\n`;
           previewText += `⚠️ Set \`confirm: true\` to add these items to cart.`;
 
           return {

@@ -453,11 +453,11 @@ export class SwiggyInstamartPlatform extends QuickCommercePlatform {
 
   // Instamart only refreshes its lat/lng/address cookies on the next page load;
   // without a reload the cart still uses the stale (e.g. Mumbai) location.
-  async selectAddress(addressId: string): Promise<boolean> {
+  async selectAddress(addressId: string, retried = false): Promise<boolean> {
     // Reloading before the select-location POST completes aborts it and the
     // old address sticks, so wait for that response first.
     const saved = this.page!.waitForResponse(r => r.url().includes('select-location'), { timeout: 15000 }).catch(() => null);
-    const ok = await super.selectAddress(addressId);
+    const ok = await super.selectAddress(addressId, retried);
     if (ok) {
       await saved;
       await this.page!.goto(this.baseUrl, { waitUntil: 'domcontentloaded', timeout: 30000 });

@@ -486,12 +486,12 @@ export class BlinkitPlatform extends QuickCommercePlatform {
 
   private selectedAddress?: Address;
 
-  async selectAddress(addressId: string): Promise<boolean> {
+  async selectAddress(addressId: string, retried = false): Promise<boolean> {
     const addr = (await this.getAddresses())[Number(addressId)];
     const lat = async () =>
       (await this.page!.context().cookies()).find(c => c.name === 'gr_1_lat')?.value ?? '';
     const before = await lat();
-    const ok = await super.selectAddress(addressId);
+    const ok = await super.selectAddress(addressId, retried);
     if (ok) {
       this.selectedAddress = addr;
       // Blinkit applies the new location (gr_1_lat/lon cookies) ~2s after the picker

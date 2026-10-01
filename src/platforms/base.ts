@@ -167,7 +167,7 @@ export abstract class QuickCommercePlatform {
   /**
    * Select delivery address by id from getAddresses().
    */
-  async selectAddress(addressId: string): Promise<boolean> {
+  async selectAddress(addressId: string, retried = false): Promise<boolean> {
     if (!this.page) return false;
     try {
       const target = (await this.getAddresses())[Number(addressId)];
@@ -181,6 +181,8 @@ export abstract class QuickCommercePlatform {
       await cards.first().waitFor({ state: 'hidden', timeout: 10000 }).catch(() => {});
       return true;
     } catch (error) {
+      // Picker clicks are flaky on the mobile viewport ("outside of the viewport"); retry once.
+      if (!retried) return this.selectAddress(addressId, true);
       console.error('Error selecting address:', error);
       return false;
     }

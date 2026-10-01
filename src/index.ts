@@ -20,6 +20,13 @@ import { sessionPath } from './session-helper.js';
 import { relevant, rankByUnitPrice, resolveItem, unitPrice, validateCart } from './ranking.js';
 
 // One line per fee; platforms without itemisation fall back to a lump "Fees" line.
+// What the caller should do about a store banner.
+function noticeAdvice(notice: string): string {
+  return /add address/i.test(notice)
+    ? 'No delivery address is active on this session; call list_addresses then select_address, and retry.'
+    : 'Checkout is not possible right now; try again later or another platform.';
+}
+
 function feeLines(cart: { fees?: { label: string; amount: number }[]; deliveryFee: number }): string {
   const fees = cart.fees?.length ? cart.fees : cart.deliveryFee ? [{ label: 'Fees', amount: cart.deliveryFee }] : [];
   return fees.map(f => `${f.label}: ₹${f.amount}\n`).join('');
@@ -542,7 +549,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         const cart = await platform.getCart();
         if (!cart) responseText += `\n⚠️ Could not read the cart back to verify.\n`;
         else {
-          if (cart.notice) responseText += `\n🚫 **Store notice: ${cart.notice}** - checkout is not possible right now; try again later or another platform.\n`;
+          if (cart.notice) responseText += `\n🚫 **Store notice: ${cart.notice}** - ${noticeAdvice(cart.notice)}\n`;
           const v = validateCart(items.map((i: any) => ({ name: i.name ?? '', quantity: i.quantity })).filter((i: any) => i.name), cart);
           if (v.missing.length || v.wrongQty.length || !v.billOk) {
             responseText += `\n⚠️ **Cart validation failed**\n`;
@@ -604,7 +611,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           const notice = (await platform.getCart().catch(() => null))?.notice;
           return {
             content: [{ type: 'text', text: notice
-              ? `🚫 ${platformName.toUpperCase()} cannot take orders right now: "${notice}". Try again later or use another platform.`
+              ? `🚫 ${platformName.toUpperCase()} cannot take orders right now: "${notice}". ${noticeAdvice(notice)}`
               : `❌ Could not build an order preview on ${platformName.toUpperCase()} (empty cart or checkout unavailable).` }],
           };
         }

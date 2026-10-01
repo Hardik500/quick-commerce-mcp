@@ -563,6 +563,9 @@ export class BlinkitPlatform extends QuickCommercePlatform {
       const body = await this.page.locator('body').innerText().catch(() => '');
       const m = body.match(/[^\n]*(?:not serviceable|unserviceable|not available in your new location|doesn't deliver|not delivering|can't deliver)[^\n]*/i);
       if (m) throw new Error(`Address not serviceable on Blinkit: ${m[0].trim()}`);
+      // Blinkit drops items it finds out of stock at checkout ("1 out of stock item removed"),
+      // so the cart changed under us; the caller must re-read the cart and re-add.
+      if (/out of stock items? removed/i.test(body)) throw new Error('Blinkit removed an out-of-stock item from the cart at checkout; re-check the cart and add the item again or pick another');
       if (/out of stock item/i.test(body)) throw new Error('Cart has an out-of-stock item on Blinkit; remove it before checkout');
       return null;
     }

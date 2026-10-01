@@ -17,7 +17,7 @@ import { BlinkitPlatform } from './platforms/blinkit.js';
 import { QuickCommercePlatform, Product, SearchResult } from './platforms/base.js';
 import { StealthBrowser } from './engine/stealth-browser.js';
 import { sessionPath } from './session-helper.js';
-import { relevant, rankByUnitPrice, resolveItem, unitPrice } from './ranking.js';
+import { relevant, rankByUnitPrice, resolveItem, unitPrice, validateCart } from './ranking.js';
 
 // One line per fee; platforms without itemisation fall back to a lump "Fees" line.
 function feeLines(cart: { fees?: { label: string; amount: number }[]; deliveryFee: number }): string {
@@ -530,6 +530,21 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         let responseText = `✅ Added to cart on **${platformName.toUpperCase()}**:\n\n`;
         for (const result of results) {
           responseText += result.success ? `✓ ${result.name}\n` : `✗ ${result.name} (failed)\n`;
+        }
+
+        // Verify against the real cart, not just the click results.
+        const cart = await platform.getCart();
+        if (!cart) responseText += `\n⚠️ Could not read the cart back to verify.\n`;
+        else {
+          const v = validateCart(items.map((i: any) => ({ name: i.name ?? '', quantity: i.quantity })).filter((i: any) => i.name), cart);
+          if (v.missing.length || v.wrongQty.length || !v.billOk) {
+            responseText += `\n⚠️ **Cart validation failed**\n`;
+            v.missing.forEach(m => responseText += `- Not in cart: ${m}\n`);
+            v.wrongQty.forEach(m => responseText += `- Quantity mismatch: ${m}\n`);
+            if (!v.billOk) responseText += `- Items + fees do not add up to the total; re-check before paying\n`;
+            responseText += `Ask the user whether to retry, pick alternatives (resolve_items) or continue.\n`;
+          } else responseText += `\n✅ Cart validated: all items present, bill adds up.\n`;
+          responseText += `\nItems total: ₹${cart.subtotal}\n${feeLines(cart)}**To pay: ₹${cart.total}**\n`;
         }
 
         return {

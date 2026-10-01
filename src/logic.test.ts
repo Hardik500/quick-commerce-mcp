@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { unitPrice, relevant, rankByUnitPrice, resolveItem } from './ranking.js';
+import { unitPrice, relevant, rankByUnitPrice, resolveItem, validateCart } from './ranking.js';
 import { BlinkitPlatform, parseBill } from './platforms/blinkit.js';
 import type { Product } from './platforms/base.js';
 
@@ -64,4 +64,11 @@ test("parseBill: discounted items total and unknown charges", () => {
   const b = parseBill(["Bill details", "Items total Saved ₹2 ₹195 ₹193", "Delivery charge ₹30", "Handling charge ₹12", "Late night convenience charge ₹15", "Grand total ₹250"]);
   assert.equal(b.subtotal, 193); assert.equal(b.total, 250);
   assert.deepEqual(b.fees.map(f => f.amount), [30, 12, 15]);
+});
+
+test("validateCart: missing, qty mismatch, bill reconcile", () => {
+  const cart = { items: [{ name: "Coke", cartQuantity: 1 }], subtotal: 38, total: 80, fees: [{ amount: 30 }, { amount: 12 }] };
+  const v = validateCart([{ name: "coke", quantity: 2 }, { name: "Paneer", quantity: 1 }], cart);
+  assert.deepEqual(v.missing, ["Paneer"]); assert.equal(v.wrongQty.length, 1); assert.equal(v.billOk, true);
+  assert.equal(validateCart([], { ...cart, total: 99 }).billOk, false);
 });

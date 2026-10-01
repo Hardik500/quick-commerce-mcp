@@ -60,3 +60,20 @@ export function rankByUnitPrice(products: Product[]): { p: Product; u: { value: 
   const unit = [...counts].sort((a, b) => b[1] - a[1])[0][0];
   return priced.filter(x => x.u.label === unit).sort((a, b) => a.u.value - b.u.value);
 }
+
+// Compare what was requested with what the cart holds, and check items + fees = total.
+// ponytail: matches cart rows by case-insensitive name; Blinkit/Zepto cart rows carry no product id.
+export function validateCart(
+  wanted: { name: string; quantity: number }[],
+  cart: { items: { name: string; cartQuantity: number }[]; subtotal: number; total: number; fees?: { amount: number }[] },
+): { missing: string[]; wrongQty: string[]; billOk: boolean } {
+  const norm = (s: string) => s.toLowerCase().replace(/\s+/g, ' ').trim();
+  const missing: string[] = [], wrongQty: string[] = [];
+  for (const w of wanted) {
+    const row = cart.items.find(i => norm(i.name) === norm(w.name));
+    if (!row) missing.push(w.name);
+    else if (row.cartQuantity !== w.quantity) wrongQty.push(`${w.name} (wanted ${w.quantity}, cart has ${row.cartQuantity})`);
+  }
+  const fees = (cart.fees ?? []).reduce((s, f) => s + f.amount, 0);
+  return { missing, wrongQty, billOk: !cart.fees?.length || Math.abs(cart.subtotal + fees - cart.total) <= 1 };
+}

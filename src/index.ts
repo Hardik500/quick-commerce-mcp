@@ -3,6 +3,7 @@
  * MCP Server Entry Point
  * Implements Model Context Protocol for quick commerce aggregation
  */
+import { randomUUID } from 'node:crypto';
 import { Server } from '@modelcontextprotocol/sdk/server/index.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import {
@@ -42,6 +43,9 @@ async function searchOn(platformName: string, query: string): Promise<SearchResu
 // sessions (and any bot-detection fallout) stay isolated per platform.
 const platforms: Map<string, QuickCommercePlatform> = new Map();
 const browsers: Map<string, StealthBrowser> = new Map();
+
+// One-time confirm tokens for place_order (step 2 must present the token from step 1).
+const orderTokens: Map<string, { platform: string; total: number; expires: number }> = new Map();
 
 // Tool definitions
 const TOOLS: Tool[] = [
@@ -143,6 +147,19 @@ const TOOLS: Tool[] = [
         },
       },
       required: ['platform'],
+    },
+  },
+  {
+    name: 'place_order',
+    description: 'Place the current cart as a Cash on Delivery order (Blinkit only for now). Two steps: call without confirm_token to select Cash and get a summary + token (nothing is charged); call again with that token to place the order. ONLY pass the token after the user has explicitly approved the summary.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        platform: { type: 'string', enum: ['blinkit'], description: 'Platform to order on' },
+        payment_method: { type: 'string', enum: ['cod'], description: 'Payment method' },
+        confirm_token: { type: 'string', description: 'Token returned by step 1; places the order' },
+      },
+      required: ['platform', 'payment_method'],
     },
   },
   {
@@ -545,6 +562,31 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         responseText += `💳 Payment options: ${preview.paymentMethods.join(', ') || 'none detected'}`;
 
         return { content: [{ type: 'text', text: responseText }] };
+      }
+
+      case 'place_order': {
+        const { platform: platformName, payment_method, confirm_token } = args as any;
+        const platform = platforms.get(platformName);
+        if (!platform) return { content: [{ type: 'text', text: `❌ Platform not initialized. Search first.` }] };
+        const say = (text: string) => ({ content: [{ type: 'text', text }] });
+
+        if (!confirm_token) {
+          const r = await platform.placeOrder(payment_method, false);
+          if (!r.ready) return say(`❌ ${r.message}`);
+          const preview = await platform.getCart();
+          const token = randomUUID();
+          orderTokens.set(token, { platform: platformName, total: r.total!, expires: Date.now() + 5 * 60_000 });
+          const items = preview?.items.map(i => `${i.cartQuantity}x ${i.name}`).join(', ') ?? '';
+          return say(`🛑 **Ready to place — NOT yet ordered.**\n${items}\n**To pay: ₹${r.total} (Cash on Delivery)**\nTo place this order, get the user's explicit approval, then call place_order again with confirm_token: ${token} (valid 5 min).`);
+        }
+
+        const t = orderTokens.get(confirm_token);
+        orderTokens.delete(confirm_token); // one-time
+        if (!t || t.platform !== platformName || t.expires < Date.now()) {
+          return say('❌ Invalid or expired confirm_token. Run the first step again.');
+        }
+        const r = await platform.placeOrder(payment_method, true);
+        return say(`${r.success ? '✅' : '❌'} ${r.message}`);
       }
 
       case 'compare_prices': {

@@ -568,11 +568,39 @@ export class BlinkitPlatform extends QuickCommercePlatform {
     }
   }
 
-  async placeOrder(paymentMethod: string): Promise<any> {
-    // Safety: Never auto-place orders
-    return {
-      success: false,
-      message: 'Order placement requires manual confirmation for safety',
-    };
+  private armedTotal?: number;
+
+  async placeOrder(paymentMethod: string, confirm = false): Promise<any> {
+    if (!this.page) throw new Error('Platform not initialized');
+    if (paymentMethod !== 'cod') return { success: false, message: 'Only "cod" is supported on Blinkit.' };
+    const frame = this.page.frameLocator('iframe[src*="zpaykit"]').first();
+    const payNow = this.page.getByText(/^Pay Now/).last();
+
+    if (!confirm) {
+      this.armedTotal = undefined;
+      const preview = await this.getOrderPreview();
+      if (!preview) return { success: false, message: 'Could not reach checkout (empty cart?).' };
+      if (!preview.paymentMethods.includes('Cash on Delivery')) {
+        return { success: false, message: 'Cash on Delivery is not enabled for this cart (Blinkit needs an items subtotal of at least ₹50).' };
+      }
+      await frame.locator('[role="button"][aria-label="Cash"]').first().click({ timeout: 5000 });
+      await frame.getByText(/exact change/i).first().waitFor({ timeout: 8000 });
+      await payNow.waitFor({ timeout: 5000 });
+      this.armedTotal = preview.cart.total;
+      return { success: false, ready: true, total: preview.cart.total, message: 'Cash selected; stopped before "Pay Now".' };
+    }
+
+    if (this.armedTotal === undefined) return { success: false, message: 'Checkout is not armed; run the first step again.' };
+    this.armedTotal = undefined; // one shot, even if the click fails
+    // Still on the Cash-selected payment screen?
+    const stillThere = await frame.getByText(/exact change/i).first().isVisible().catch(() => false);
+    if (!stillThere || !(await payNow.isVisible().catch(() => false))) {
+      return { success: false, message: 'Checkout screen changed since the preview; nothing was charged. Run the first step again.' };
+    }
+    await payNow.click({ timeout: 5000 });
+    // ponytail: success signal not yet observed live; report page text for the caller to judge.
+    await this.page.waitForLoadState('domcontentloaded').catch(() => {});
+    const text = (await this.page.locator('body').innerText().catch(() => '')).replace(/\s+/g, ' ').slice(0, 200);
+    return { success: true, message: `"Pay Now" clicked. Page now shows: ${text}` };
   }
 }

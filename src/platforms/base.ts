@@ -206,10 +206,14 @@ export abstract class QuickCommercePlatform {
   }
 
   /**
-   * Place order (requires explicit confirmation)
+   * Place order in two steps. confirm=false selects the payment method and stops
+   * before the final click (ready=true, total set). confirm=true performs the
+   * final click, only if a prior confirm=false left the checkout armed.
    */
-  abstract placeOrder(paymentMethod: string): Promise<{
+  abstract placeOrder(paymentMethod: string, confirm?: boolean): Promise<{
     success: boolean;
+    ready?: boolean;
+    total?: number;
     orderId?: string;
     message: string;
   }>;

@@ -50,13 +50,13 @@ const orderTokens: Map<string, { platform: string; total: number; expires: numbe
 // Payment modes place_order can drive, per platform. Anything else gets a friendly refusal.
 const SUPPORTED_PAYMENTS: Record<string, string[]> = {
   blinkit: ['cod', 'upi'],
-  zepto: ['cod', 'upi_qr'],
+  zepto: ['cod', 'upi_qr', 'card'],
   swiggy: ['cod'],
   'swiggy-instamart': ['cod'],
 };
 
 /** Asked right after login: tells the agent to collect the payment mode (and UPI ID) up front. */
-const PAYMENT_PROMPT = '\n\n💳 Before ordering, ask the user how they want to pay and tell them what is supported:\n- Cash on Delivery ("cod"): Blinkit, Zepto, Instamart\n- UPI collect request ("upi", needs their UPI ID like name@bank; approved on their phone): Blinkit only\n- UPI QR (\"upi_qr\", the user scans a QR we send, valid ~3 min): Zepto only\n- Cards, wallets, netbanking, Pay Later: not supported.\nIf they choose UPI, ask for the UPI ID now.';
+const PAYMENT_PROMPT = '\n\n💳 Before ordering, ask the user how they want to pay and tell them what is supported:\n- Cash on Delivery ("cod"): Blinkit, Zepto, Instamart\n- UPI collect request ("upi", needs their UPI ID like name@bank; approved on their phone): Blinkit only\n- UPI QR (\"upi_qr\", the user scans a QR we send, valid ~3 min): Zepto only\n- Saved card (\"card\", needs the last 4 digits of a saved card; CVV is read from a local file): Zepto only\n- New cards, wallets, netbanking, Pay Later: not supported.\nIf they choose UPI, ask for the UPI ID now. If they choose a card, ask which saved card (last 4 digits).';
 
 // Tool definitions
 const TOOLS: Tool[] = [
@@ -167,8 +167,9 @@ const TOOLS: Tool[] = [
       type: 'object',
       properties: {
         platform: { type: 'string', enum: ['zepto', 'swiggy', 'swiggy-instamart', 'blinkit'], description: 'Platform to order on' },
-        payment_method: { type: 'string', description: 'Payment method the user chose: "cod" (all platforms), "upi_qr" (Zepto only; returns a QR image the user scans) or "upi" (Blinkit only; sends a collect request to upi_id that the user approves on their phone). Other modes are refused with the supported list.' },
+        payment_method: { type: 'string', description: 'Payment method the user chose: "cod" (all platforms), "upi_qr" (Zepto only; returns a QR image the user scans), "card" (Zepto only; saved card, pass card_last4) or "upi" (Blinkit only; sends a collect request to upi_id that the user approves on their phone). Other modes are refused with the supported list.' },
         upi_id: { type: 'string', description: 'UPI ID (e.g. name@bank); required for payment_method "upi"' },
+        card_last4: { type: 'string', description: 'Last 4 digits of the saved card; required for payment_method "card"' },
         confirm_token: { type: 'string', description: 'Token returned by step 1; places the order' },
       },
       required: ['platform', 'payment_method'],
@@ -578,7 +579,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       }
 
       case 'place_order': {
-        const { platform: platformName, payment_method, confirm_token, upi_id } = args as any;
+        const { platform: platformName, payment_method, confirm_token, upi_id, card_last4 } = args as any;
         const platform = platforms.get(platformName);
         if (!platform) return { content: [{ type: 'text', text: `❌ Platform not initialized. Search first.` }] };
         const say = (text: string) => ({ content: [{ type: 'text', text }] });
@@ -590,14 +591,16 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         }
         if (method === 'upi' && !upi_id) return say('❌ UPI selected: ask the user for their UPI ID (name@bank) and pass it as upi_id.');
 
+        if (method === 'card' && !card_last4) return say('❌ Card selected: ask the user which saved card (last 4 digits) and pass it as card_last4.');
+
         if (!confirm_token) {
-          const r = await platform.placeOrder(payment_method, false, upi_id);
+          const r = await platform.placeOrder(payment_method, false, method === 'card' ? card_last4 : upi_id);
           if (!r.ready) return say(`❌ ${r.message}`);
           const preview = await platform.getCart();
           const token = randomUUID();
           orderTokens.set(token, { platform: platformName, total: r.total!, expires: Date.now() + 5 * 60_000 });
           const items = preview?.items.map(i => `${i.cartQuantity}x ${i.name}`).join(', ') ?? '';
-          return say(`🛑 **Ready to place — NOT yet ordered.**\n${items}\n**To pay: ₹${r.total} (${method === 'upi' ? `UPI collect request to ${upi_id}; the user approves it on their phone` : method === 'upi_qr' ? 'UPI QR code; the user scans it with any UPI app' : 'Cash on Delivery'})**\nTo place this order, get the user's explicit approval, then call place_order again with the same payment_method${payment_method === 'upi' ? ' and upi_id' : ''} and confirm_token: ${token} (valid 5 min).`);
+          return say(`🛑 **Ready to place — NOT yet ordered.**\n${items}\n**To pay: ₹${r.total} (${method === 'upi' ? `UPI collect request to ${upi_id}; the user approves it on their phone` : method === 'upi_qr' ? 'UPI QR code; the user scans it with any UPI app' : method === 'card' ? `saved card ending ${card_last4}; may ask the user for a bank OTP` : 'Cash on Delivery'})**\nTo place this order, get the user's explicit approval, then call place_order again with the same payment_method${payment_method === 'upi' ? ' and upi_id' : ''} and confirm_token: ${token} (valid 5 min).`);
         }
 
         const t = orderTokens.get(confirm_token);

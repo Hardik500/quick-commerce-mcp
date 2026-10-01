@@ -19,6 +19,9 @@ import {
   Address,
 } from './base.js';
 import { sessionPath, ensureSessionDir } from '../session-helper.js';
+import * as fs from 'node:fs';
+import * as os from 'node:os';
+import * as path from 'node:path';
 
 export class ZeptoPlatform extends QuickCommercePlatform {
   // Verified against the live site with an authenticated session
@@ -464,10 +467,12 @@ export class ZeptoPlatform extends QuickCommercePlatform {
 
   private armedTotal?: number;
 
-  async placeOrder(paymentMethod: string, confirm = false): Promise<any> {
+  // detail = last 4 digits of a saved card, for paymentMethod 'card'.
+  async placeOrder(paymentMethod: string, confirm = false, detail?: string): Promise<any> {
     if (!this.page) throw new Error('Platform not initialized');
     if (paymentMethod === 'upi_qr') return this.placeQrOrder(confirm);
-    if (paymentMethod !== 'cod') return { success: false, message: 'Only "cod" and "upi_qr" are supported on Zepto.' };
+    if (paymentMethod === 'card') return this.placeCardOrder(confirm, detail);
+    if (paymentMethod !== 'cod') return { success: false, message: 'Only "cod", "upi_qr" and "card" are supported on Zepto.' };
     // Selecting the COD row reveals a "Pay ₹N on delivery" bar: that is the final click.
     const payBar = this.page.getByText(/^Pay ₹\d+ on delivery/).last();
 
@@ -494,6 +499,50 @@ export class ZeptoPlatform extends QuickCommercePlatform {
     await this.page.waitForLoadState('domcontentloaded').catch(() => {});
     const text = (await this.page.locator('body').innerText().catch(() => '')).replace(/\s+/g, ' ').slice(0, 200);
     return { success: true, message: `"Pay on delivery" clicked. Page now shows: ${text}` };
+  }
+
+  private armedCard?: { label: string; cvv: string };
+
+  // CVVs live in ~/.config/clari/cards.env as "<last4>=<cvv>" lines (chmod 600); never logged.
+  // ponytail: plaintext file, move to the keychain when hardening.
+  private readCvv(last4: string): string | undefined {
+    try {
+      const file = path.join(os.homedir(), '.config', 'clari', 'cards.env');
+      const line = fs.readFileSync(file, 'utf8').split('\n').find(l => l.trim().startsWith(last4 + '='));
+      return line?.split('=')[1]?.trim() || undefined;
+    } catch { return undefined; }
+  }
+
+  /** Saved card: selecting the card row creates the pending order, so step 1 only verifies; step 2 selects, fills CVV, pays. */
+  private async placeCardOrder(confirm: boolean, last4?: string): Promise<any> {
+    const page = this.page!;
+    if (!confirm) {
+      this.armedTotal = undefined; this.armedCard = undefined;
+      if (!last4 || !/^\d{4}$/.test(last4)) return { success: false, message: 'Pass card_last4 (last 4 digits of a saved card).' };
+      const cvv = this.readCvv(last4);
+      if (!cvv) return { success: false, message: `No CVV configured for card ending ${last4}: add a "${last4}=<cvv>" line to ~/.config/clari/cards.env.` };
+      const preview = await this.getOrderPreview();
+      if (!preview) return { success: false, message: 'Could not reach checkout (empty cart?).' };
+      const label = preview.paymentMethods.find(m => m.endsWith('••' + last4));
+      if (!label) return { success: false, message: `No saved card ending ${last4} on Zepto. Saved: ${preview.paymentMethods.filter(m => m.includes('••')).join(', ') || 'none'}.` };
+      this.armedTotal = preview.cart.total;
+      this.armedCard = { label, cvv };
+      return { success: false, ready: true, total: preview.cart.total, message: `Saved card ${label} available; stopped before selecting it.` };
+    }
+
+    if (this.armedTotal === undefined || !this.armedCard) return { success: false, message: 'Checkout is not armed; run the first step again.' };
+    const { label, cvv } = this.armedCard;
+    this.armedTotal = undefined; this.armedCard = undefined; // one shot
+    await page.getByText(label.split(' ••')[0], { exact: false }).first().click({ timeout: 5000 });
+    const cvvInput = page.frameLocator('iframe[src*="juspay"]').locator('input[name="security_code"]');
+    await cvvInput.waitFor({ timeout: 15000 });
+    await cvvInput.fill(cvv);
+    await page.getByText('Make Payment', { exact: true }).first().click({ timeout: 5000 });
+    // ponytail: post-payment page (3DS/OTP/success) not observed yet; report what shows.
+    await page.waitForLoadState('domcontentloaded').catch(() => {});
+    const text = (await page.locator('body').innerText().catch(() => '')).replace(/\s+/g, ' ').slice(0, 300);
+    const image = await page.screenshot().catch(() => undefined);
+    return { success: true, image, message: `"Make Payment" clicked for ${label}. Page now shows: ${text}` };
   }
 
   /** UPI via QR: step 2 click creates a pending order and shows a QR (valid ~3.5 min) that the user scans. */

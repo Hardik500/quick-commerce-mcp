@@ -19,9 +19,6 @@ import {
   Address,
 } from './base.js';
 import { sessionPath, ensureSessionDir } from '../session-helper.js';
-import * as fs from 'node:fs';
-import * as os from 'node:os';
-import * as path from 'node:path';
 
 export class ZeptoPlatform extends QuickCommercePlatform {
   // Verified against the live site with an authenticated session
@@ -503,14 +500,10 @@ export class ZeptoPlatform extends QuickCommercePlatform {
 
   private armedCard?: { label: string; cvv: string };
 
-  // CVVs live in ~/.config/clari/cards.env as "<last4>=<cvv>" lines (chmod 600); never logged.
-  // ponytail: plaintext file, move to the keychain when hardening.
+  // CVV comes from env var QC_CVV_<last4> (set in the MCP client's env block); never logged.
+  // ponytail: plaintext env var, move to the keychain when hardening.
   private readCvv(last4: string): string | undefined {
-    try {
-      const file = path.join(os.homedir(), '.config', 'clari', 'cards.env');
-      const line = fs.readFileSync(file, 'utf8').split('\n').find(l => l.trim().startsWith(last4 + '='));
-      return line?.split('=')[1]?.trim() || undefined;
-    } catch { return undefined; }
+    return process.env[`QC_CVV_${last4}`]?.trim() || undefined;
   }
 
   /** Saved card: selecting the card row creates the pending order, so step 1 only verifies; step 2 selects, fills CVV, pays. */
@@ -520,7 +513,7 @@ export class ZeptoPlatform extends QuickCommercePlatform {
       this.armedTotal = undefined; this.armedCard = undefined;
       if (!last4 || !/^\d{4}$/.test(last4)) return { success: false, message: 'Pass card_last4 (last 4 digits of a saved card).' };
       const cvv = this.readCvv(last4);
-      if (!cvv) return { success: false, message: `No CVV configured for card ending ${last4}: add a "${last4}=<cvv>" line to ~/.config/clari/cards.env.` };
+      if (!cvv) return { success: false, message: `No CVV configured for card ending ${last4}: set env var QC_CVV_${last4} in the MCP server config.` };
       const preview = await this.getOrderPreview();
       if (!preview) return { success: false, message: 'Could not reach checkout (empty cart?).' };
       const label = preview.paymentMethods.find(m => m.endsWith('••' + last4));

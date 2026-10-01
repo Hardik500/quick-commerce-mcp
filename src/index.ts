@@ -49,14 +49,14 @@ const orderTokens: Map<string, { platform: string; total: number; expires: numbe
 
 // Payment modes place_order can drive, per platform. Anything else gets a friendly refusal.
 const SUPPORTED_PAYMENTS: Record<string, string[]> = {
-  blinkit: ['cod', 'upi'],
+  blinkit: ['cod', 'upi', 'card'],
   zepto: ['cod', 'upi_qr', 'card'],
   swiggy: ['cod'],
   'swiggy-instamart': ['cod'],
 };
 
 /** Asked right after login: tells the agent to collect the payment mode (and UPI ID) up front. */
-const PAYMENT_PROMPT = '\n\n💳 Before ordering, ask the user how they want to pay and tell them what is supported:\n- Cash on Delivery ("cod"): Blinkit, Zepto, Instamart\n- UPI collect request ("upi", needs their UPI ID like name@bank; approved on their phone): Blinkit only\n- UPI QR (\"upi_qr\", the user scans a QR we send, valid ~3 min): Zepto only\n- Saved card (\"card\", needs the last 4 digits of a saved card; CVV is read from the QC_CVV_<last4> env var on the server): Zepto only\n- New cards, wallets, netbanking, Pay Later: not supported.\nIf they choose UPI, ask for the UPI ID now. If they choose a card, ask which saved card (last 4 digits).';
+const PAYMENT_PROMPT = '\n\n💳 Before ordering, ask the user how they want to pay and tell them what is supported:\n- Cash on Delivery ("cod"): Blinkit, Zepto, Instamart\n- UPI collect request ("upi", needs their UPI ID like name@bank; approved on their phone): Blinkit only\n- UPI QR (\"upi_qr\", the user scans a QR we send, valid ~3 min): Zepto only\n- Saved card (\"card\", needs the last 4 digits of a saved card; CVV is read from the QC_CVV_<last4> env var on the server): Zepto, Blinkit\n- New cards, wallets, netbanking, Pay Later: not supported.\nIf they choose UPI, ask for the UPI ID now. If they choose a card, ask which saved card (last 4 digits).';
 
 // Tool definitions
 const TOOLS: Tool[] = [
@@ -167,7 +167,7 @@ const TOOLS: Tool[] = [
       type: 'object',
       properties: {
         platform: { type: 'string', enum: ['zepto', 'swiggy', 'swiggy-instamart', 'blinkit'], description: 'Platform to order on' },
-        payment_method: { type: 'string', description: 'Payment method the user chose: "cod" (all platforms), "upi_qr" (Zepto only; returns a QR image the user scans), "card" (Zepto only; saved card, pass card_last4) or "upi" (Blinkit only; sends a collect request to upi_id that the user approves on their phone). Other modes are refused with the supported list.' },
+        payment_method: { type: 'string', description: 'Payment method the user chose: "cod" (all platforms), "upi_qr" (Zepto only; returns a QR image the user scans), "card" (Zepto, Blinkit; saved card, pass card_last4) or "upi" (Blinkit only; sends a collect request to upi_id that the user approves on their phone). Other modes are refused with the supported list.' },
         upi_id: { type: 'string', description: 'UPI ID (e.g. name@bank); required for payment_method "upi"' },
         card_last4: { type: 'string', description: 'Last 4 digits of the saved card; required for payment_method "card"' },
         confirm_token: { type: 'string', description: 'Token returned by step 1; places the order' },
@@ -587,7 +587,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         const method = String(payment_method ?? '').toLowerCase();
         const allowed = SUPPORTED_PAYMENTS[platformName] ?? [];
         if (!allowed.includes(method)) {
-          return say(`❌ "${payment_method}" is not supported on ${platformName}. Supported there: ${allowed.join(', ')}. (UPI collect: Blinkit only; UPI QR: Zepto only; cards, wallets and netbanking are not supported.) Ask the user to pick another mode.`);
+          return say(`❌ "${payment_method}" is not supported on ${platformName}. Supported there: ${allowed.join(', ')}. (UPI collect: Blinkit only; UPI QR: Zepto only; saved cards: Zepto and Blinkit; new cards, wallets and netbanking are not supported.) Ask the user to pick another mode.`);
         }
         if (method === 'upi' && !upi_id) return say('❌ UPI selected: ask the user for their UPI ID (name@bank) and pass it as upi_id.');
 

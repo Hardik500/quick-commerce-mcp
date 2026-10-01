@@ -572,6 +572,56 @@ export class BlinkitPlatform extends QuickCommercePlatform {
   }
 
   private armedTotal?: number;
+  private armedCard?: string;
+
+  // CVV comes from env var QC_CVV_<last4> (set in the MCP client's env block); never logged.
+  // ponytail: plaintext env var, move to the keychain when hardening.
+  private readCvv(last4: string): string | undefined {
+    return process.env[`QC_CVV_${last4}`]?.trim() || undefined;
+  }
+
+  /** Saved card: selecting a card and typing the CVV creates no order on Blinkit, so step 1 stops at the ready "Pay Now". */
+  private async placeCardOrder(confirm: boolean, last4?: string): Promise<any> {
+    const page = this.page!;
+    const frame = page.frameLocator('iframe[src*="zpaykit"]').first();
+    const payNow = page.getByText(/^Pay Now/).last();
+    const cvvInput = frame.locator('input[type="password"]');
+
+    if (!confirm) {
+      this.armedTotal = undefined; this.armedCard = undefined;
+      if (!last4 || !/^\d{4}$/.test(last4)) return { success: false, message: 'Pass card_last4 (last 4 digits of a saved card).' };
+      const cvv = this.readCvv(last4);
+      if (!cvv) return { success: false, message: `No CVV configured for card ending ${last4}: set env var QC_CVV_${last4} in the MCP server config.` };
+      const preview = await this.getOrderPreview();
+      if (!preview) return { success: false, message: 'Could not reach checkout (empty cart?).' };
+      const label = preview.paymentMethods.find(m => m.endsWith('••' + last4));
+      if (!label) return { success: false, message: `No saved card ending ${last4} on Blinkit. Saved: ${preview.paymentMethods.filter(m => m.includes('••')).join(', ') || 'none'}.` };
+      // The saved cards sit under the "Add credit or debit cards" accordion.
+      const row = frame.getByText(label.split(' ••')[0], { exact: false }).first();
+      if (!(await row.isVisible().catch(() => false))) {
+        await frame.getByText('Add credit or debit cards', { exact: false }).first().click({ timeout: 5000 });
+      }
+      await row.click({ timeout: 8000 });
+      await cvvInput.fill(cvv, { timeout: 8000 });
+      await payNow.waitFor({ timeout: 5000 });
+      this.armedTotal = preview.cart.total;
+      this.armedCard = label;
+      return { success: false, ready: true, total: preview.cart.total, message: `Saved card ${label} selected with CVV filled; stopped before "Pay Now".` };
+    }
+
+    if (this.armedTotal === undefined || !this.armedCard) return { success: false, message: 'Checkout is not armed; run the first step again.' };
+    const label = this.armedCard;
+    this.armedTotal = undefined; this.armedCard = undefined; // one shot
+    if (!(await cvvInput.inputValue().catch(() => '')) || !(await payNow.isVisible().catch(() => false))) {
+      return { success: false, message: 'Checkout screen changed since the preview; nothing was charged. Run the first step again.' };
+    }
+    await payNow.click({ timeout: 5000 });
+    // ponytail: post-payment page (3DS/OTP/success) not observed yet; report what shows.
+    await page.waitForLoadState('domcontentloaded').catch(() => {});
+    const text = (await page.locator('body').innerText().catch(() => '')).replace(/\s+/g, ' ').slice(0, 300);
+    const image = await page.screenshot().catch(() => undefined);
+    return { success: true, image, message: `"Pay Now" clicked for ${label}. Page now shows: ${text}` };
+  }
 
   /** UPI collect: fill the VPA, stop before "Checkout" (which sends the request to the phone). */
   private async placeUpiOrder(confirm: boolean, upiId?: string): Promise<any> {
@@ -610,10 +660,12 @@ export class BlinkitPlatform extends QuickCommercePlatform {
     return { success: ok, message: done ? `After the collect request, page shows: ${text}` : `No outcome within 3 min (request not approved?). Page shows: ${text}` };
   }
 
+  // detail = UPI ID for 'upi', last 4 digits of a saved card for 'card'.
   async placeOrder(paymentMethod: string, confirm = false, upiId?: string): Promise<any> {
     if (!this.page) throw new Error('Platform not initialized');
     if (paymentMethod === 'upi') return this.placeUpiOrder(confirm, upiId);
-    if (paymentMethod !== 'cod') return { success: false, message: 'Only "cod" and "upi" are supported on Blinkit.' };
+    if (paymentMethod === 'card') return this.placeCardOrder(confirm, upiId);
+    if (paymentMethod !== 'cod') return { success: false, message: 'Only "cod", "upi" and "card" are supported on Blinkit.' };
     const frame = this.page.frameLocator('iframe[src*="zpaykit"]').first();
     const payNow = this.page.getByText(/^Pay Now/).last();
 

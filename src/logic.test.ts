@@ -2,6 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { unitPrice, relevant, rankByUnitPrice, resolveItem, validateCart } from './ranking.js';
 import { BlinkitPlatform, parseBill } from './platforms/blinkit.js';
+import { parseZeptoBill } from './platforms/zepto.js';
 import type { Product } from './platforms/base.js';
 
 const prod = (o: Partial<Product>): Product =>
@@ -71,4 +72,10 @@ test("validateCart: missing, qty mismatch, bill reconcile", () => {
   const v = validateCart([{ name: "coke", quantity: 2 }, { name: "Paneer", quantity: 1 }], cart);
   assert.deepEqual(v.missing, ["Paneer"]); assert.equal(v.wrongQty.length, 1); assert.equal(v.billOk, true);
   assert.equal(validateCart([], { ...cart, total: 99 }).billOk, false);
+});
+
+test("parseZeptoBill: waived fees are 0, savings rows ignored", () => {
+  const b = parseZeptoBill(["Yay! You saved ₹47 on this order", "Item Total ₹125 ₹123", "Delivery Fee ₹30", "Handling Fee ₹10 FREE", "Late Night Fee ₹35 FREE", "To Pay ₹200 ₹153", "Discount on MRP ₹2", "Savings on Handling fee ₹10"]);
+  assert.equal(b.subtotal, 123); assert.equal(b.total, 153);
+  assert.deepEqual(b.fees, [{ label: "Delivery Fee", amount: 30 }]);
 });

@@ -20,6 +20,24 @@ import {
 } from './base.js';
 import { sessionPath, ensureSessionDir } from '../session-helper.js';
 
+/** Zepto bill rows: "Item Total ₹125 ₹123", "Delivery Fee ₹30", "Handling Fee ₹10 FREE" (waived = 0). */
+export function parseZeptoBill(rows: string[]): { subtotal: number; total: number; fees: { label: string; amount: number }[] } {
+  let subtotal = 0, total = 0;
+  const fees: { label: string; amount: number }[] = [];
+  for (const r of rows) {
+    const text = r.replace(/\s+/g, ' ').trim();
+    const i = text.indexOf('₹');
+    if (i < 0) continue;
+    const label = text.slice(0, i).trim();
+    const amounts = [...text.matchAll(/₹\s*([\d,]+(?:\.\d+)?)/g)].map(m => Number(m[1].replace(/,/g, '')));
+    const amount = amounts[amounts.length - 1];
+    if (/^item total/i.test(label)) subtotal = amount;
+    else if (/^to pay/i.test(label)) total = amount;
+    else if (/(fee|charge|tip|donation)s?$/i.test(label) && !/^(savings|discount)/i.test(label) && !/\bfree\b/i.test(text) && amount) fees.push({ label, amount });
+  }
+  return { subtotal, total, fees };
+}
+
 export class ZeptoPlatform extends QuickCommercePlatform {
   // Verified against the live site with an authenticated session
   // (scripts/inspect-selectors.ts inspectZeptoAuthenticated) on 2026-09-28.
@@ -334,16 +352,18 @@ export class ZeptoPlatform extends QuickCommercePlatform {
       await this.openCart();
       const cartItems = await this.extractCartItems();
 
-      const itemTotalText = await this.page.locator(this.selectors.billItemTotal).first().textContent().catch(() => null);
-      const toPayText = await this.page.locator(this.selectors.billToPay).first().textContent().catch(() => null);
-      const subtotal = itemTotalText ? this.lastPrice(itemTotalText) : cartItems.reduce((sum, item) => sum + item.price * item.cartQuantity, 0);
-      const total = toPayText ? this.lastPrice(toPayText) : subtotal;
+      const rows = await this.page.locator('div.flex.justify-between').evaluateAll(e => e.map(x => (x as HTMLElement).innerText));
+      const bill = parseZeptoBill(rows);
+      const subtotal = bill.subtotal || cartItems.reduce((sum, item) => sum + item.price * item.cartQuantity, 0);
+      const total = bill.total || subtotal;
+      const fees = bill.fees;
 
       return {
         platform: this.name,
         items: cartItems,
         subtotal,
         deliveryFee: total - subtotal,
+        fees,
         total,
       };
     } catch (error) {

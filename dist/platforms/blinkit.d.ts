@@ -3,7 +3,16 @@
  * URL: https://blinkit.com
  */
 import { BrowserContext, Locator } from 'playwright';
-import { QuickCommercePlatform, SearchResult, CartSummary } from './base.js';
+import { QuickCommercePlatform, SearchResult, CartSummary, OrderPreview } from './base.js';
+/** Bill rows look like "Items total Saved ₹2 ₹195 ₹193" or "Handling charge ₹12": last ₹ amount is what's charged. */
+export declare function parseBill(rows: string[]): {
+    subtotal: number;
+    total: number;
+    fees: {
+        label: string;
+        amount: number;
+    }[];
+};
 export declare class BlinkitPlatform extends QuickCommercePlatform {
     private selectors;
     constructor();
@@ -14,6 +23,7 @@ export declare class BlinkitPlatform extends QuickCommercePlatform {
         otpSent?: boolean;
         phone?: string;
     }>;
+    sendOtp(phone: string): Promise<boolean>;
     submitOtp(otp: string): Promise<boolean>;
     /** Persist cookies + localStorage so the next run starts already logged in. */
     saveSession(): Promise<void>;
@@ -27,7 +37,17 @@ export declare class BlinkitPlatform extends QuickCommercePlatform {
     removeFromCart(productId: string): Promise<boolean>;
     clearCart(): Promise<boolean>;
     protected openAddressPicker(): Promise<Locator>;
-    getOrderPreview(): Promise<any>;
-    placeOrder(paymentMethod: string): Promise<any>;
+    private selectedAddress?;
+    selectAddress(addressId: string, retried?: boolean): Promise<boolean>;
+    getLatestOrder(): Promise<string | null>;
+    getOrderPreview(): Promise<OrderPreview | null>;
+    private armedTotal?;
+    private armedCard?;
+    private readCvv;
+    /** Saved card: selecting a card and typing the CVV creates no order on Blinkit, so step 1 stops at the ready "Pay Now". */
+    private placeCardOrder;
+    /** UPI collect: fill the VPA, stop before "Checkout" (which sends the request to the phone). */
+    private placeUpiOrder;
+    placeOrder(paymentMethod: string, confirm?: boolean, upiId?: string): Promise<any>;
 }
 //# sourceMappingURL=blinkit.d.ts.map

@@ -3,6 +3,7 @@
  * MCP Server Entry Point
  * Implements Model Context Protocol for quick commerce aggregation
  */
+import { randomUUID } from 'node:crypto';
 import { Server } from '@modelcontextprotocol/sdk/server/index.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import { CallToolRequestSchema, ListToolsRequestSchema, } from '@modelcontextprotocol/sdk/types.js';
@@ -11,44 +12,25 @@ import { SwiggyInstamartPlatform } from './platforms/swiggy-instamart.js';
 import { BlinkitPlatform } from './platforms/blinkit.js';
 import { StealthBrowser } from './engine/stealth-browser.js';
 import { sessionPath } from './session-helper.js';
+import { loadPrefs, savePrefs } from './preferences.js';
+import * as fs from 'node:fs';
+import { relevant, rankByUnitPrice, resolveItem, unitPrice, validateCart } from './ranking.js';
+// One line per fee; platforms without itemisation fall back to a lump "Fees" line.
+// What the caller should do about a store banner.
+function noticeAdvice(notice) {
+    return /add address/i.test(notice)
+        ? 'No delivery address is active on this session; call list_addresses then select_address, and retry.'
+        : 'Checkout is not possible right now; try again later or another platform.';
+}
+function feeLines(cart) {
+    const fees = cart.fees?.length ? cart.fees : cart.deliveryFee ? [{ label: 'Fees', amount: cart.deliveryFee }] : [];
+    return fees.map(f => `${f.label}: ₹${f.amount}\n`).join('');
+}
 // All platforms supported by the "all" shorthand in tool inputs.
 const ALL_PLATFORMS = ['zepto', 'swiggy-instamart', 'blinkit'];
 function resolvePlatforms(list) {
     const names = [].concat(list);
     return names.includes('all') ? ALL_PLATFORMS : names;
-}
-// Price per 100 ml/g (or per piece) so different pack sizes compare fairly.
-// ponytail: handles "450 ml", "1 L", "2 x 500 g", "6 pcs"; anything else is
-// ranked by raw price.
-function unitPrice(p) {
-    const m = p.quantity?.toLowerCase().match(/(?:(\d+)\s*x\s*)?(\d+(?:\.\d+)?)\s*(ml|l|ltr|litre|g|gm|kg|pc|pcs|pieces?|units?)\b/);
-    if (!m)
-        return { value: p.price, label: 'pack' };
-    const amount = Number(m[1] || 1) * Number(m[2]);
-    const unit = m[3];
-    if (unit === 'ml' || unit === 'g' || unit === 'gm')
-        return { value: (p.price / amount) * 100, label: unit === 'ml' ? '100 ml' : '100 g' };
-    if (unit === 'kg' || unit.startsWith('l'))
-        return { value: p.price / (amount * 10), label: unit === 'kg' ? '100 g' : '100 ml' };
-    return { value: p.price / amount, label: 'pc' };
-}
-// In-stock products whose name contains every query word.
-// ponytail: literal word match ("coke" won't match "Coca-Cola"); add synonyms if it bites.
-function relevant(query, products) {
-    const words = query.toLowerCase().split(/\s+/).filter(w => w.length > 1).map(w => w.replace(/s$/, ''));
-    return products.filter(p => p.inStock && words.every(w => p.name.toLowerCase().includes(w)));
-}
-// Cheapest first by unit price, ranking only the most common unit so ₹/100 ml
-// isn't compared against ₹/pc.
-function rankByUnitPrice(products) {
-    const priced = products.map(p => ({ p, u: unitPrice(p) }));
-    if (priced.length === 0)
-        return [];
-    const counts = new Map();
-    for (const { u } of priced)
-        counts.set(u.label, (counts.get(u.label) || 0) + 1);
-    const unit = [...counts].sort((a, b) => b[1] - a[1])[0][0];
-    return priced.filter(x => x.u.label === unit).sort((a, b) => a.u.value - b.u.value);
 }
 // Logged-in search on one platform; errors are returned, not thrown.
 async function searchOn(platformName, query) {
@@ -67,6 +49,17 @@ async function searchOn(platformName, query) {
 // sessions (and any bot-detection fallout) stay isolated per platform.
 const platforms = new Map();
 const browsers = new Map();
+// One-time confirm tokens for place_order (step 2 must present the token from step 1).
+const orderTokens = new Map();
+// Payment modes place_order can drive, per platform. Anything else gets a friendly refusal.
+const SUPPORTED_PAYMENTS = {
+    blinkit: ['cod', 'upi', 'card'],
+    zepto: ['cod', 'upi_qr', 'card'],
+    swiggy: ['cod'],
+    'swiggy-instamart': ['cod'],
+};
+/** Asked right after login: tells the agent to collect the payment mode (and UPI ID) up front. */
+const PAYMENT_PROMPT = '\n\n💳 Before ordering, ask the user how they want to pay and tell them what is supported:\n- Cash on Delivery ("cod"): Blinkit, Zepto, Instamart\n- UPI collect request ("upi", needs their UPI ID like name@bank; approved on their phone): Blinkit only\n- UPI QR (\"upi_qr\", the user scans a QR we send, valid ~3 min): Zepto only\n- Saved card (\"card\", needs the last 4 digits of a saved card; CVV is read from the QC_CVV_<last4> env var on the server): Zepto, Blinkit\n- New cards, wallets, netbanking, Pay Later: not supported.\nIf they choose UPI, ask for the UPI ID now. If they choose a card, ask which saved card (last 4 digits).';
 // Tool definitions
 const TOOLS = [
     {
@@ -123,6 +116,18 @@ const TOOLS = [
         },
     },
     {
+        name: 'resolve_items',
+        description: 'Resolve shopping-list items (e.g. "high protein paneer", "coke zero") on ONE platform without touching the cart. For each item returns in-stock matches, or, if there is no exact match or it is out of stock, the closest in-stock alternatives. Present the options and let the user choose before add_to_cart.',
+        inputSchema: {
+            type: 'object',
+            properties: {
+                platform: { type: 'string', enum: ['zepto', 'swiggy', 'swiggy-instamart', 'blinkit'], description: 'Platform to search' },
+                queries: { type: 'array', items: { type: 'string' }, description: 'Items the user wants' },
+            },
+            required: ['platform', 'queries'],
+        },
+    },
+    {
         name: 'add_to_cart',
         description: 'Add products to cart on specified platform. Shows cart preview and asks for confirmation.',
         inputSchema: {
@@ -164,6 +169,45 @@ const TOOLS = [
                     type: 'string',
                     enum: ['zepto', 'swiggy', 'swiggy-instamart', 'blinkit', 'bigbasket'],
                     description: 'Platform to get cart from',
+                },
+            },
+            required: ['platform'],
+        },
+    },
+    {
+        name: 'place_order',
+        description: 'Place the current cart as a Cash on Delivery order. Two steps: call without confirm_token to select Cash and get a summary + token (nothing is charged); call again with that token to place the order. ONLY pass the token after the user has explicitly approved the summary.',
+        inputSchema: {
+            type: 'object',
+            properties: {
+                platform: { type: 'string', enum: ['zepto', 'swiggy', 'swiggy-instamart', 'blinkit'], description: 'Platform to order on' },
+                payment_method: { type: 'string', description: 'Payment method the user chose: "cod" (all platforms), "upi_qr" (Zepto only; returns a QR image the user scans), "card" (Zepto, Blinkit; saved card, pass card_last4) or "upi" (Blinkit only; sends a collect request to upi_id that the user approves on their phone). Other modes are refused with the supported list.' },
+                upi_id: { type: 'string', description: 'UPI ID (e.g. name@bank); required for payment_method "upi"' },
+                card_last4: { type: 'string', description: 'Last 4 digits of the saved card; required for payment_method "card"' },
+                confirm_token: { type: 'string', description: 'Token returned by step 1; places the order' },
+            },
+            required: ['platform', 'payment_method'],
+        },
+    },
+    {
+        name: 'get_order_status',
+        description: 'Show the most recent order (status, items, total) from order history. Read-only. Supported on Blinkit and Zepto (not yet Instamart).',
+        inputSchema: {
+            type: 'object',
+            properties: { platform: { type: 'string', enum: ['zepto', 'swiggy', 'swiggy-instamart', 'blinkit'], description: 'Platform to check' } },
+            required: ['platform'],
+        },
+    },
+    {
+        name: 'get_order_preview',
+        description: 'Preview the checkout for the current cart: items, bill, delivery address and available payment options. Does not place an order or charge anything.',
+        inputSchema: {
+            type: 'object',
+            properties: {
+                platform: {
+                    type: 'string',
+                    enum: ['zepto', 'swiggy', 'swiggy-instamart', 'blinkit'],
+                    description: 'Platform to preview checkout on',
                 },
             },
             required: ['platform'],
@@ -229,6 +273,39 @@ const TOOLS = [
                 address_id: { type: 'string', description: 'Address id from list_addresses' },
             },
             required: ['platform', 'address_id'],
+        },
+    },
+    {
+        name: 'request_otp',
+        description: 'Start login: enter the phone number on the platform and trigger the OTP SMS. Then call submit_otp. Phone defaults to the saved one (set_preferences). To switch numbers, call logout first. Supported on Blinkit, Zepto and Instamart.',
+        inputSchema: {
+            type: 'object',
+            properties: {
+                platform: { type: 'string', enum: ['zepto', 'swiggy-instamart', 'blinkit'] },
+                phone: { type: 'string', description: '10-digit mobile number (optional if saved)' },
+            },
+            required: ['platform'],
+        },
+    },
+    {
+        name: 'logout',
+        description: 'Delete the saved session for a platform (e.g. to log in with a different phone number).',
+        inputSchema: {
+            type: 'object',
+            properties: { platform: { type: 'string', enum: ['zepto', 'swiggy-instamart', 'blinkit'] } },
+            required: ['platform'],
+        },
+    },
+    {
+        name: 'set_preferences',
+        description: 'Save defaults used before ordering: phone (for login), upi_id (name@bank), payment_method (cod/upi/upi_qr/card). Pass an empty string to clear a value. Call with no arguments to just read the saved values.',
+        inputSchema: {
+            type: 'object',
+            properties: {
+                phone: { type: 'string' },
+                upi_id: { type: 'string' },
+                payment_method: { type: 'string' },
+            },
         },
     },
     {
@@ -396,6 +473,8 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
                         responseText += `❌ ${status.platform}: Not logged in\n`;
                     }
                 }
+                if (statuses.some(s => 'loggedIn' in s && s.loggedIn))
+                    responseText += PAYMENT_PROMPT;
                 return {
                     content: [{ type: 'text', text: responseText }],
                 };
@@ -412,7 +491,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
                     const success = await platform.submitOtp(otp);
                     if (success) {
                         return {
-                            content: [{ type: 'text', text: `✅ Successfully logged in to ${platformName}` }],
+                            content: [{ type: 'text', text: `✅ Successfully logged in to ${platformName}${PAYMENT_PROMPT}` }],
                         };
                     }
                     else {
@@ -432,13 +511,10 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
                 if (!confirm) {
                     // Preview mode
                     let previewText = `🛒 Cart Preview for **${platformName.toUpperCase()}**\n\n`;
-                    let total = 0;
-                    for (const item of items) {
-                        previewText += `- ${item.quantity}x ${item.name}\n`;
-                        // Price would come from cache or search
-                        total += item.quantity * 40; // Placeholder
-                    }
-                    previewText += `\n**Estimated Total: ₹${total}**\n\n`;
+                    for (const item of items)
+                        previewText += `- ${item.quantity}x ${item.name ?? item.productId}\n`;
+                    // No price is shown here: the real prices and fees only exist once items are in the cart.
+                    previewText += `\nPrices and fees are shown after adding (nothing is charged by adding to cart).\n`;
                     previewText += `⚠️ Set \`confirm: true\` to add these items to cart.`;
                     return {
                         content: [{ type: 'text', text: previewText }],
@@ -451,14 +527,45 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
                         content: [{ type: 'text', text: `❌ Platform not initialized. Search first.` }],
                     };
                 }
+                // Items already in the cart have no ADD button; skip them (validation below flags quantity differences).
+                const norm = (s) => s.toLowerCase().replace(/\s+/g, ' ').trim();
+                const existing = (await platform.getCart().catch(() => null))?.items ?? [];
                 const results = [];
                 for (const item of items) {
+                    if (item.name && existing.some(e => norm(e.name) === norm(item.name))) {
+                        results.push({ name: item.name, success: true, already: true });
+                        continue;
+                    }
+                    // addToCart clicks the product card on the current page, so bring the card up first.
+                    if (item.name)
+                        await platform.search(item.name).catch(() => null);
                     const success = await platform.addToCart(item.productId, item.quantity);
-                    results.push({ name: item.name, success });
+                    results.push({ name: item.name ?? item.productId, success, already: false });
                 }
-                let responseText = `✅ Added to cart on **${platformName.toUpperCase()}**:\n\n`;
+                const failed = results.filter(r => !r.success).length;
+                let responseText = `${failed ? '⚠️' : '✅'} Added to cart on **${platformName.toUpperCase()}**${failed ? ` (${failed} of ${results.length} failed)` : ''}:\n\n`;
                 for (const result of results) {
-                    responseText += result.success ? `✓ ${result.name}\n` : `✗ ${result.name} (failed)\n`;
+                    responseText += result.already ? `✓ ${result.name} (already in cart, not re-added)\n` : result.success ? `✓ ${result.name}\n` : `✗ ${result.name} (failed)\n`;
+                }
+                // Verify against the real cart, not just the click results.
+                const cart = await platform.getCart();
+                if (!cart)
+                    responseText += `\n⚠️ Could not read the cart back to verify.\n`;
+                else {
+                    if (cart.notice)
+                        responseText += `\n🚫 **Store notice: ${cart.notice}** - ${noticeAdvice(cart.notice)}\n`;
+                    const v = validateCart(items.map((i) => ({ name: i.name ?? '', quantity: i.quantity })).filter((i) => i.name), cart);
+                    if (v.missing.length || v.wrongQty.length || !v.billOk) {
+                        responseText += `\n⚠️ **Cart validation failed**\n`;
+                        v.missing.forEach(m => responseText += `- Not in cart: ${m}\n`);
+                        v.wrongQty.forEach(m => responseText += `- Quantity mismatch: ${m}\n`);
+                        if (!v.billOk)
+                            responseText += `- Items + fees do not add up to the total; re-check before paying\n`;
+                        responseText += `Ask the user whether to retry, pick alternatives (resolve_items) or continue.\n`;
+                    }
+                    else
+                        responseText += `\n✅ Cart validated: all items present, bill adds up.\n`;
+                    responseText += `\nItems total: ₹${cart.subtotal}\n${feeLines(cart)}**To pay: ₹${cart.total}**\n`;
                 }
                 return {
                     content: [{ type: 'text', text: responseText }],
@@ -483,11 +590,131 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
                     responseText += `${item.cartQuantity}x ${item.name} - ₹${item.price * item.cartQuantity}\n`;
                 }
                 responseText += `\nSubtotal: ₹${cart.subtotal}\n`;
-                responseText += `Delivery: ₹${cart.deliveryFee}\n`;
+                responseText += feeLines(cart);
                 responseText += `**Total: ₹${cart.total}**`;
                 return {
                     content: [{ type: 'text', text: responseText }],
                 };
+            }
+            case 'get_order_status': {
+                const platform = platforms.get(args.platform);
+                if (!platform)
+                    return { content: [{ type: 'text', text: `❌ Platform not initialized. Search first.` }] };
+                const text = await platform.getLatestOrder();
+                return { content: [{ type: 'text', text: text ?? 'No order found (or not supported on this platform yet).' }] };
+            }
+            case 'get_order_preview': {
+                const { platform: platformName } = args;
+                const platform = platforms.get(platformName);
+                if (!platform) {
+                    return { content: [{ type: 'text', text: `❌ Platform not initialized. Search first.` }] };
+                }
+                const preview = await platform.getOrderPreview();
+                if (!preview) {
+                    const notice = (await platform.getCart().catch(() => null))?.notice;
+                    return {
+                        content: [{ type: 'text', text: notice
+                                    ? `🚫 ${platformName.toUpperCase()} cannot take orders right now: "${notice}". ${noticeAdvice(notice)}`
+                                    : `❌ Could not build an order preview on ${platformName.toUpperCase()} (empty cart or checkout unavailable).` }],
+                    };
+                }
+                const { cart } = preview;
+                let responseText = `🧾 **Order Preview - ${platformName.toUpperCase()}** (nothing has been charged)\n\n`;
+                for (const item of cart.items) {
+                    responseText += `${item.cartQuantity}x ${item.name} - ₹${item.price * item.cartQuantity}\n`;
+                }
+                responseText += `\nItems total: ₹${cart.subtotal}\n${feeLines(cart)}**To pay: ₹${cart.total}**\n`;
+                responseText += `\n📍 Deliver to: ${preview.address || 'unknown'}\n`;
+                responseText += `💳 Payment options: ${preview.paymentMethods.join(', ') || 'none detected'}`;
+                return { content: [{ type: 'text', text: responseText }] };
+            }
+            case 'request_otp': {
+                const { platform: platformName, phone } = args;
+                const number = String(phone ?? loadPrefs().phone ?? '').replace(/\D/g, '').slice(-10);
+                if (number.length !== 10)
+                    return { content: [{ type: 'text', text: '❌ Need a 10-digit phone number (pass phone, or save it with set_preferences).' }] };
+                try {
+                    const ok = await (await getPlatform(platformName)).sendOtp(number);
+                    return { content: [{ type: 'text', text: ok ? `📲 OTP sent to ${number} on ${platformName}. Ask the user for it, then call submit_otp.` : `❌ ${platformName}: OTP screen did not appear. Already logged in? Try check_login_status, or logout first.` }] };
+                }
+                catch (e) {
+                    return { content: [{ type: 'text', text: `❌ ${e.message}` }] };
+                }
+            }
+            case 'logout': {
+                const { platform: platformName } = args;
+                await browsers.get(platformName)?.close();
+                browsers.delete(platformName);
+                platforms.delete(platformName);
+                fs.rmSync(sessionPath(platformName), { force: true });
+                return { content: [{ type: 'text', text: `🚪 ${platformName}: session deleted. Use request_otp to log in again.` }] };
+            }
+            case 'set_preferences': {
+                const { phone, upi_id, payment_method } = args;
+                const p = savePrefs({ phone, upi_id, payment_method });
+                return { content: [{ type: 'text', text: `⚙️ Saved preferences: phone=${p.phone ?? '-'}, upi_id=${p.upi_id ?? '-'}, payment_method=${p.payment_method ?? '-'}` }] };
+            }
+            case 'place_order': {
+                const prefs = loadPrefs();
+                const a = args;
+                const { platform: platformName, confirm_token, card_last4 } = a;
+                const payment_method = a.payment_method ?? prefs.payment_method;
+                const upi_id = a.upi_id ?? prefs.upi_id;
+                const platform = platforms.get(platformName);
+                if (!platform)
+                    return { content: [{ type: 'text', text: `❌ Platform not initialized. Search first.` }] };
+                const say = (text) => ({ content: [{ type: 'text', text }] });
+                const method = String(payment_method ?? '').toLowerCase();
+                const allowed = SUPPORTED_PAYMENTS[platformName] ?? [];
+                if (!allowed.includes(method)) {
+                    return say(`❌ "${payment_method}" is not supported on ${platformName}. Supported there: ${allowed.join(', ')}. (UPI collect: Blinkit only; UPI QR: Zepto only; saved cards: Zepto and Blinkit; new cards, wallets and netbanking are not supported.) Ask the user to pick another mode.`);
+                }
+                if (method === 'upi' && !upi_id)
+                    return say('❌ UPI selected: ask the user for their UPI ID (name@bank) and pass it as upi_id.');
+                if (method === 'card' && !card_last4)
+                    return say('❌ Card selected: ask the user which saved card (last 4 digits) and pass it as card_last4.');
+                if (!confirm_token) {
+                    // Read the cart BEFORE arming: getCart navigates away and would disarm the checkout screen.
+                    const preview = await platform.getCart();
+                    const r = await platform.placeOrder(payment_method, false, method === 'card' ? card_last4 : upi_id);
+                    if (!r.ready)
+                        return say(`❌ ${r.message}`);
+                    const token = randomUUID();
+                    orderTokens.set(token, { platform: platformName, total: r.total, expires: Date.now() + 5 * 60_000 });
+                    const items = preview?.items.map(i => `${i.cartQuantity}x ${i.name}`).join(', ') ?? '';
+                    return say(`🛑 **Ready to place — NOT yet ordered.**\n${items}\n**To pay: ₹${r.total} (${method === 'upi' ? `UPI collect request to ${upi_id}; the user approves it on their phone` : method === 'upi_qr' ? 'UPI QR code; the user scans it with any UPI app' : method === 'card' ? `saved card ending ${card_last4}; may ask the user for a bank OTP` : 'Cash on Delivery'})**\nTo place this order, get the user's explicit approval, then call place_order again with the same payment_method${payment_method === 'upi' ? ' and upi_id' : ''} and confirm_token: ${token} (valid 5 min).`);
+                }
+                const t = orderTokens.get(confirm_token);
+                orderTokens.delete(confirm_token); // one-time
+                if (!t || t.platform !== platformName || t.expires < Date.now()) {
+                    return say('❌ Invalid or expired confirm_token. Run the first step again.');
+                }
+                const r = await platform.placeOrder(payment_method, true);
+                const out = [{ type: 'text', text: `${r.success ? '✅' : '❌'} ${r.message}` }];
+                if (r.image)
+                    out.push({ type: 'image', data: r.image.toString('base64'), mimeType: 'image/png' });
+                return { content: out };
+            }
+            case 'resolve_items': {
+                const { platform: platformName, queries } = args;
+                const say = (text) => ({ content: [{ type: 'text', text }] });
+                const platform = await getPlatform(platformName);
+                const login = await platform.checkLogin();
+                if (!login.loggedIn)
+                    return say(`❌ Not logged in on ${platformName}.`);
+                let text = `🔎 **Item resolution - ${platformName.toUpperCase()}** (nothing added to cart)\n`;
+                for (const q of queries) {
+                    const res = resolveItem(q, (await platform.search(q)).products);
+                    const head = res.status === 'match' ? `✅ "${q}": matches found (pick one)`
+                        : res.status === 'alternatives' ? `⚠️ "${q}": ${res.outOfStock ? 'exact match is out of stock' : 'no exact match'}; closest in-stock options (ask the user to choose)`
+                            : `❌ "${q}": nothing in stock${res.outOfStock ? ' (exact match is out of stock)' : ''}; ask the user for a different item or platform`;
+                    text += `\n${head}\n`;
+                    res.options.forEach((p, i) => {
+                        const u = unitPrice(p);
+                        text += `${i + 1}. ${p.name} (${p.quantity}) - ₹${p.price} (₹${u.value.toFixed(1)}/${u.label}) ID: \`${p.id}\`\n`;
+                    });
+                }
+                return say(text + '\nAdd the user\'s chosen products with add_to_cart, then show get_order_preview.');
             }
             case 'compare_prices': {
                 const { items } = args;
@@ -555,10 +782,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
             }
             case 'list_addresses': {
                 const { platform: platformName } = args;
-                const platform = platforms.get(platformName);
-                if (!platform) {
-                    return { content: [{ type: 'text', text: `❌ Platform not initialized. Search first.` }] };
-                }
+                const platform = await getPlatform(platformName);
                 const addrs = await platform.getAddresses();
                 const text = addrs.length
                     ? addrs.map((a) => `[${a.id}] ${a.label}: ${a.addressLine1}${a.pincode ? ` (${a.pincode})` : ''}`).join('\n')
@@ -567,10 +791,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
             }
             case 'select_address': {
                 const { platform: platformName, address_id } = args;
-                const platform = platforms.get(platformName);
-                if (!platform) {
-                    return { content: [{ type: 'text', text: `❌ Platform not initialized. Search first.` }] };
-                }
+                const platform = await getPlatform(platformName);
                 const ok = await platform.selectAddress(String(address_id));
                 return {
                     content: [
@@ -595,12 +816,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
                         ],
                     };
                 }
-                const platform = platforms.get(platformName);
-                if (!platform) {
-                    return {
-                        content: [{ type: 'text', text: `❌ Platform not initialized.` }],
-                    };
-                }
+                const platform = await getPlatform(platformName);
                 const success = await platform.clearCart();
                 return {
                     content: [

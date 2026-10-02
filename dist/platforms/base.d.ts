@@ -24,8 +24,15 @@ export interface CartSummary {
     items: CartItem[];
     subtotal: number;
     deliveryFee: number;
+    /** Itemised charges beyond the items total (delivery, handling, small cart, ...). */
+    fees?: {
+        label: string;
+        amount: number;
+    }[];
     total: number;
     deliverySlot?: string;
+    /** Store closed / unserviceable banner, when the platform shows one. */
+    notice?: string;
 }
 export interface SearchResult {
     query: string;
@@ -42,6 +49,13 @@ export interface Address {
     city: string;
     pincode: string;
     phone: string;
+}
+export interface OrderPreview {
+    cart: CartSummary;
+    /** Delivery address text as shown at checkout. */
+    address: string;
+    /** Payment options visible on the platform's payment screen. */
+    paymentMethods: string[];
 }
 export declare abstract class QuickCommercePlatform {
     protected name: string;
@@ -63,6 +77,8 @@ export declare abstract class QuickCommercePlatform {
         otpSent?: boolean;
         phone?: string;
     }>;
+    /** Enter the phone number and request an OTP. Override per platform. */
+    sendOtp(_phone: string): Promise<boolean>;
     /**
      * Submit OTP and complete login
      */
@@ -94,26 +110,37 @@ export declare abstract class QuickCommercePlatform {
     /**
      * Get saved addresses. `id` is the card's position in the picker.
      */
+    private addressCache?;
     getAddresses(): Promise<Address[]>;
+    /**
+     * Run a UI action (click) and wait until the page text changes, instead of
+     * sleeping a fixed time. Resolves anyway on timeout (action may be a no-op).
+     */
+    protected afterChange(action: () => Promise<unknown>, timeout?: number): Promise<void>;
     /**
      * Select delivery address by id from getAddresses().
      */
-    selectAddress(addressId: string): Promise<boolean>;
+    selectAddress(addressId: string, retried?: boolean): Promise<boolean>;
     /**
      * Get final order preview (before payment)
      */
-    abstract getOrderPreview(): Promise<{
-        cart: CartSummary;
-        address: Address;
-        paymentMethods: string[];
-        walletBalance?: number;
-    } | null>;
+    abstract getOrderPreview(): Promise<OrderPreview | null>;
+    /** Text of the most recent order (status, items, total), or null if unsupported/none. */
+    getLatestOrder(): Promise<string | null>;
+    /** Known payment option labels, matched against the payment screen text. */
+    private static readonly PAYMENT_LABELS;
+    protected scanPaymentMethods(text: string): string[];
     /**
-     * Place order (requires explicit confirmation)
+     * Place order in two steps. confirm=false selects the payment method and stops
+     * before the final click (ready=true, total set). confirm=true performs the
+     * final click, only if a prior confirm=false left the checkout armed.
      */
-    abstract placeOrder(paymentMethod: string): Promise<{
+    abstract placeOrder(paymentMethod: string, confirm?: boolean, upiId?: string): Promise<{
         success: boolean;
+        ready?: boolean;
+        total?: number;
         orderId?: string;
+        image?: Buffer;
         message: string;
     }>;
     /**

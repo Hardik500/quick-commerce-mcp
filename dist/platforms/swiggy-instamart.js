@@ -1,5 +1,43 @@
 import { QuickCommercePlatform, } from './base.js';
 import { sessionPath, ensureSessionDir } from '../session-helper.js';
+import { storeNotice } from '../ranking.js';
+/**
+ * Instamart bill is one text line per cell: label, then "struck original, actual" or a single amount or "FREE"
+ * (e.g. "Handling Fee","₹12.83","₹12.00" / "Delivery Partner Fee","₹30.00","FREE"). Last amount is what's charged.
+ */
+export function parseInstamartBill(lines) {
+    const start = lines.findIndex(l => /^bill details$/i.test(l));
+    let subtotal = 0, total = 0;
+    const fees = [];
+    let label = '', amounts = [], free = false;
+    const flush = () => {
+        if (!label || !amounts.length)
+            return;
+        const amount = amounts[amounts.length - 1];
+        if (/^item total/i.test(label))
+            subtotal = amount;
+        else if (/^to pay/i.test(label))
+            total = amount;
+        else if (!free && amount)
+            fees.push({ label, amount });
+    };
+    for (const l of lines.slice(start + 1)) {
+        if (/^₹/.test(l))
+            amounts.push(Number(l.replace(/[^\d.]/g, '')));
+        else if (/^free$/i.test(l))
+            free = true;
+        else {
+            flush();
+            if (/^to pay/i.test(label))
+                break;
+            label = l;
+            amounts = [];
+            free = false;
+        }
+    }
+    flush();
+    return { subtotal, total, fees };
+}
 export class SwiggyInstamartPlatform extends QuickCommercePlatform {
     // Verified against the live site with an authenticated session
     // (scripts/test-instamart-addtocart.ts) on 2026-09-29. data-testids are used where
@@ -42,7 +80,7 @@ export class SwiggyInstamartPlatform extends QuickCommercePlatform {
         // Swiggy's mobile site shows "Rotate your device" in landscape viewports.
         await this.page.setViewportSize({ width: 390, height: 844 });
         await this.page.goto(this.baseUrl, { waitUntil: 'domcontentloaded', timeout: 30000 });
-        await this.page.waitForTimeout(3000);
+        await this.page.waitForLoadState('load', { timeout: 15000 }).catch(() => { });
         await this.handleLocationPopup();
     }
     async handleLocationPopup() {
@@ -52,7 +90,7 @@ export class SwiggyInstamartPlatform extends QuickCommercePlatform {
             const gps = await this.page.$(this.selectors.setGpsButton);
             if (gps) {
                 await gps.click();
-                await this.page.waitForTimeout(2000);
+                await gps.waitForElementState('hidden', { timeout: 8000 }).catch(() => { });
             }
         }
         catch {
@@ -84,6 +122,27 @@ export class SwiggyInstamartPlatform extends QuickCommercePlatform {
             return { loggedIn: false };
         }
     }
+    async sendOtp(phone) {
+        const page = this.page;
+        if (!page)
+            throw new Error('Platform not initialized');
+        await page.goto(this.baseUrl, { waitUntil: 'domcontentloaded', timeout: 30000 });
+        await this.handleLocationPopup();
+        const tel = page.locator('[data-testid="input-field-tel-national"]');
+        if (!(await tel.count()))
+            await page.locator('[data-testid="user-account-icon"]').click();
+        await tel.waitFor({ timeout: 15000 });
+        // fill() doesn't fire React's onChange here; type keystrokes and verify (early keystrokes get dropped before hydration).
+        for (let i = 0; i < 3; i++) {
+            await tel.click({ clickCount: 3 });
+            await page.keyboard.press('Backspace');
+            await page.keyboard.type(phone, { delay: 120 });
+            if ((await tel.inputValue()).replace(/\D/g, '') === phone)
+                break;
+        }
+        await page.locator('button:has-text("CONTINUE")').first().click();
+        return page.locator(this.selectors.otpInput).first().waitFor({ timeout: 15000 }).then(() => true, () => false);
+    }
     async submitOtp(otp) {
         if (!this.page)
             throw new Error('Platform not initialized');
@@ -96,11 +155,10 @@ export class SwiggyInstamartPlatform extends QuickCommercePlatform {
             // Controlled React input: fill() doesn't register, real keystrokes do.
             await otpInput.click();
             await this.page.keyboard.type(otp, { delay: 80 });
-            await this.page.waitForTimeout(1500);
             const verifyBtn = await this.page.$('button:has-text("VERIFY"), button:has-text("CONTINUE")');
             if (verifyBtn)
                 await verifyBtn.click().catch(() => { });
-            await this.page.waitForTimeout(5000);
+            await this.page.locator(this.selectors.otpInput).first().waitFor({ state: 'hidden', timeout: 15000 }).catch(() => { });
             // Check if login succeeded
             const loginCheck = await this.checkLogin();
             if (loginCheck.loggedIn) {
@@ -134,7 +192,7 @@ export class SwiggyInstamartPlatform extends QuickCommercePlatform {
             await this.page.goto(`${this.baseUrl}/search?custom_back=true&query=${encodeURIComponent(query)}`, { waitUntil: 'domcontentloaded', timeout: 30000 });
             try {
                 await this.page.waitForSelector(this.selectors.searchResults, { timeout: 15000 });
-                await this.page.waitForTimeout(1500);
+                await this.page.waitForLoadState('networkidle', { timeout: 5000 }).catch(() => { });
             }
             catch {
                 console.log('No search results found');
@@ -212,9 +270,11 @@ export class SwiggyInstamartPlatform extends QuickCommercePlatform {
             }
             const cardPrice = await card.evaluate((c, sel) => c.parentElement.querySelector(sel)?.textContent?.trim() || '', this.selectors.productPrice);
             await card.locator(this.selectors.addToCartButton).click();
-            await this.page.waitForTimeout(1500);
+            // Multi-variant products open a bottom sheet; single-variant ones turn
+            // into an inline stepper. Wait for the sheet, bounded.
             const sheet = this.page.locator(this.selectors.variantSheet);
-            if (await sheet.isVisible()) {
+            const sheetOpened = await sheet.waitFor({ state: 'visible', timeout: 2500 }).then(() => true, () => false);
+            if (sheetOpened) {
                 // Pick the variant matching the card's price (the single-unit pack),
                 // falling back to the first variant.
                 const rows = sheet.locator(this.selectors.variantRow);
@@ -226,24 +286,27 @@ export class SwiggyInstamartPlatform extends QuickCommercePlatform {
                         break;
                     }
                 }
-                await row.locator(this.selectors.stepperAdd).click();
-                await this.page.waitForTimeout(1000);
+                await this.afterChange(() => row.locator(this.selectors.stepperAdd).click());
                 for (let i = 1; i < quantity; i++) {
-                    await row.locator(this.selectors.stepperPlus).click();
-                    await this.page.waitForTimeout(700);
+                    await this.afterChange(() => row.locator(this.selectors.stepperPlus).click());
                 }
                 await sheet.locator(this.selectors.variantSheetClose).click();
-                await this.page.waitForTimeout(1000);
+                await sheet.waitFor({ state: 'hidden', timeout: 5000 }).catch(() => { });
             }
             else {
                 // Single-variant: ADD turns into an inline stepper; the same
                 // buttonpair-add element is the "+" button.
                 for (let i = 1; i < quantity; i++) {
-                    await card.locator(this.selectors.addToCartButton).click();
-                    await this.page.waitForTimeout(700);
+                    await this.afterChange(() => card.locator(this.selectors.addToCartButton).click());
                 }
             }
-            return true;
+            // Let the add request reach the server before the caller navigates away.
+            await this.page.waitForLoadState('networkidle', { timeout: 8000 }).catch(() => { });
+            // The card shows a quantity counter once the item is in the cart.
+            const landed = await card.locator('[data-testid="buttonpair-count"]').waitFor({ state: 'visible', timeout: 5000 }).then(() => true, () => false);
+            if (!landed)
+                console.log('Item did not land in cart:', productId);
+            return landed;
         }
         catch (error) {
             console.error('Error adding to cart:', error);
@@ -256,21 +319,18 @@ export class SwiggyInstamartPlatform extends QuickCommercePlatform {
         try {
             await this.openCart();
             const cartItems = await this.extractCartItems();
-            const subtotal = cartItems.reduce((sum, item) => sum + (item.price * item.cartQuantity), 0);
-            // Bill section is plain text: "Item Total | ₹17.00 | ... | To Pay | ₹88".
-            const toPay = await this.page.evaluate(() => {
-                const lines = document.body.innerText.split('\n').map(l => l.trim());
-                const i = lines.indexOf('To Pay');
-                return i >= 0 ? lines.slice(i + 1).find(l => l) || '' : '';
-            });
-            const total = toPay ? this.parsePrice(toPay) : subtotal;
+            const lines = await this.page.evaluate(() => document.body.innerText.split('\n').map(l => l.trim()).filter(Boolean));
+            const bill = parseInstamartBill(lines);
+            const subtotal = bill.subtotal || cartItems.reduce((sum, item) => sum + (item.price * item.cartQuantity), 0);
+            const total = bill.total || subtotal;
             return {
                 platform: this.name,
                 items: cartItems,
                 subtotal,
-                // All fees combined (delivery, handling, small-cart, GST).
                 deliveryFee: Math.max(0, total - subtotal),
+                fees: bill.fees,
                 total,
+                notice: storeNotice(await this.page.locator('body').innerText().catch(() => '')),
             };
         }
         catch (error) {
@@ -316,7 +376,8 @@ export class SwiggyInstamartPlatform extends QuickCommercePlatform {
         if (!this.page)
             return;
         await this.page.goto(`${this.baseUrl}/cart`, { waitUntil: 'domcontentloaded', timeout: 30000 });
-        await this.page.waitForTimeout(4000);
+        await this.page.waitForLoadState('networkidle', { timeout: 8000 }).catch(() => { });
+        await this.page.locator(this.selectors.cartItems).first().waitFor({ timeout: 5000 }).catch(() => { });
     }
     async removeFromCart(productId) {
         if (!this.page)
@@ -331,8 +392,8 @@ export class SwiggyInstamartPlatform extends QuickCommercePlatform {
                     .first();
                 if ((await row.count()) === 0)
                     return i > 0;
-                await row.locator(this.selectors.stepperMinus).click();
-                await this.page.waitForTimeout(1500);
+                // dispatchEvent: a sibling "other items" container can overlay the button.
+                await this.afterChange(() => row.locator(this.selectors.stepperMinus).dispatchEvent('click'));
             }
             return false;
         }
@@ -346,12 +407,17 @@ export class SwiggyInstamartPlatform extends QuickCommercePlatform {
             throw new Error('Platform not initialized');
         try {
             await this.openCart();
+            // Unavailable items sit outside the stepper list and block checkout; "Remove all" drops them.
+            const removeAll = this.page.getByText('Remove all', { exact: true }).first();
+            if (await removeAll.isVisible().catch(() => false)) {
+                await removeAll.click({ timeout: 5000 });
+                await this.page.getByText(/items? unavailable/i).first().waitFor({ state: 'hidden', timeout: 5000 }).catch(() => { });
+            }
             for (let i = 0; i < 100; i++) {
-                const minus = await this.page.$(`${this.selectors.cartItems} ${this.selectors.stepperMinus}`);
-                if (!minus)
+                const minus = this.page.locator(`${this.selectors.cartItems} ${this.selectors.stepperMinus}`).first();
+                if ((await minus.count()) === 0)
                     return true;
-                await minus.click();
-                await this.page.waitForTimeout(1500);
+                await this.afterChange(() => minus.dispatchEvent('click'));
             }
             return false;
         }
@@ -363,28 +429,87 @@ export class SwiggyInstamartPlatform extends QuickCommercePlatform {
     async openAddressPicker() {
         const page = this.page;
         await page.goto(this.baseUrl, { waitUntil: 'domcontentloaded', timeout: 30000 });
-        await page.waitForTimeout(4000);
-        await page.locator('[data-testid="address-name"]').first().click({ timeout: 8000, force: true });
+        const name = page.locator('[data-testid="address-name"]').first();
+        await name.waitFor({ timeout: 15000 });
+        await name.click({ timeout: 8000, force: true });
         const heading = page.getByText('Select from saved address', { exact: true }).first();
         await heading.waitFor({ timeout: 8000 });
         return heading.locator('xpath=../following-sibling::div[1]/div');
     }
-    async getOrderPreview() {
-        const cart = await this.getCart();
-        if (!cart)
-            return null;
-        return {
-            cart,
-            address: null,
-            paymentMethods: ['Wallet', 'UPI', 'Card'],
-        };
+    // Instamart only refreshes its lat/lng/address cookies on the next page load;
+    // without a reload the cart still uses the stale (e.g. Mumbai) location.
+    async selectAddress(addressId, retried = false) {
+        // Reloading before the select-location POST completes aborts it and the
+        // old address sticks, so wait for that response first.
+        const saved = this.page.waitForResponse(r => r.url().includes('select-location'), { timeout: 15000 }).catch(() => null);
+        const ok = await super.selectAddress(addressId, retried);
+        if (ok) {
+            await saved;
+            await this.page.goto(this.baseUrl, { waitUntil: 'domcontentloaded', timeout: 30000 });
+            await this.page.waitForLoadState('networkidle', { timeout: 8000 }).catch(() => { });
+        }
+        return ok;
     }
-    async placeOrder(paymentMethod) {
-        console.log('Place order requires manual confirmation');
-        return {
-            success: false,
-            message: 'Order placement requires manual confirmation for safety',
-        };
+    async getOrderPreview() {
+        if (!this.page)
+            throw new Error('Platform not initialized');
+        const cart = await this.getCart();
+        if (!cart || cart.items.length === 0)
+            return null;
+        try {
+            // 'Proceed to Pay' leads to /instamart/payment, which lists the methods.
+            // The page ends in either the pay button or a closed/unserviceable banner; wait for whichever shows first.
+            const btn = this.page.getByText(/proceed to pay/i).last();
+            const banner = this.page.getByText(/currently (unserviceable|closed)|not accepting orders|add address to proceed/i).first();
+            await btn.or(banner).waitFor({ timeout: 20000 });
+            if (!(await btn.isVisible())) {
+                console.error('Instamart store notice, no "Proceed to Pay" available:', await banner.innerText());
+                return null;
+            }
+            await btn.click({ timeout: 10000 });
+            await this.page.waitForURL(/payment/, { timeout: 15000 });
+            await this.page.getByText(/UPI/i).first().waitFor({ timeout: 15000 });
+            const text = await this.page.locator('body').innerText();
+            const address = (await this.page.getByText(/delivering to|deliver to/i).first().innerText().catch(() => '')).replace(/\s*\n\s*/g, ' - ');
+            return { cart, address, paymentMethods: this.scanPaymentMethods(text) };
+        }
+        catch (error) {
+            console.error('Error getting order preview:', error);
+            return null;
+        }
+    }
+    armedTotal;
+    async placeOrder(paymentMethod, confirm = false) {
+        if (!this.page)
+            throw new Error('Platform not initialized');
+        if (paymentMethod !== 'cod')
+            return { success: false, message: 'Only "cod" is supported on Instamart.' };
+        // "Pay on Delivery" opens a sub-page whose single "Cash/Pay on Delivery" button is the final click.
+        const finalBtn = this.page.getByText(/^Cash\/Pay on Delivery$/).first();
+        if (!confirm) {
+            this.armedTotal = undefined;
+            const preview = await this.getOrderPreview();
+            if (!preview)
+                return { success: false, message: 'Could not reach checkout (empty cart?).' };
+            if (!preview.paymentMethods.includes('Pay on Delivery')) {
+                return { success: false, message: 'Pay on Delivery is not offered for this cart on Instamart.' };
+            }
+            await this.page.getByText(/^Pay on Delivery$/).first().click({ timeout: 5000 });
+            await finalBtn.waitFor({ timeout: 8000 });
+            this.armedTotal = preview.cart.total;
+            return { success: false, ready: true, total: preview.cart.total, message: 'Pay on Delivery opened; stopped before the final click.' };
+        }
+        if (this.armedTotal === undefined)
+            return { success: false, message: 'Checkout is not armed; run the first step again.' };
+        this.armedTotal = undefined; // one shot, even if the click fails
+        if (!(await finalBtn.isVisible().catch(() => false))) {
+            return { success: false, message: 'Checkout screen changed since the preview; nothing was charged. Run the first step again.' };
+        }
+        await finalBtn.click({ timeout: 5000 });
+        // ponytail: success signal not yet observed live; report page text for the caller to judge.
+        await this.page.waitForLoadState('domcontentloaded').catch(() => { });
+        const text = (await this.page.locator('body').innerText().catch(() => '')).replace(/\s+/g, ' ').slice(0, 200);
+        return { success: true, message: `"Cash/Pay on Delivery" clicked. Page now shows: ${text}` };
     }
 }
 //# sourceMappingURL=swiggy-instamart.js.map

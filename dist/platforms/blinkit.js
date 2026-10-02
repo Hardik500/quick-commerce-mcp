@@ -1,5 +1,27 @@
 import { QuickCommercePlatform, } from './base.js';
 import { sessionPath, ensureSessionDir } from '../session-helper.js';
+import { storeNotice } from '../ranking.js';
+/** Bill rows look like "Items total Saved ₹2 ₹195 ₹193" or "Handling charge ₹12": last ₹ amount is what's charged. */
+export function parseBill(rows) {
+    let subtotal = 0, total = 0;
+    const fees = [];
+    for (const r of rows) {
+        const text = r.replace(/\s+/g, ' ').trim();
+        const amounts = [...text.matchAll(/₹\s*([\d,]+(?:\.\d+)?)/g)].map(m => Number(m[1].replace(/,/g, '')));
+        if (!amounts.length)
+            continue; // header row
+        const label = text.slice(0, text.indexOf('₹')).replace(/\s*Saved\s*$/i, '').trim();
+        // "Delivery charge ₹30 FREE": the amount shown is waived, not charged.
+        const amount = /\bFREE\b/.test(text) ? 0 : amounts[amounts.length - 1];
+        if (/^items total/i.test(label))
+            subtotal = amount;
+        else if (/^grand total/i.test(label))
+            total = amount;
+        else if (amount)
+            fees.push({ label, amount });
+    }
+    return { subtotal, total, fees };
+}
 export class BlinkitPlatform extends QuickCommercePlatform {
     // Verified against the live site with an authenticated session
     // (scripts/inspect-blinkit-authed.ts) on 2026-09-29. Blinkit's product
@@ -55,8 +77,7 @@ export class BlinkitPlatform extends QuickCommercePlatform {
         await this.page.setViewportSize({ width: 390, height: 844 });
         // Navigate to homepage
         await this.page.goto(this.baseUrl, { waitUntil: 'domcontentloaded', timeout: 30000 });
-        // Wait for page to stabilize
-        await this.page.waitForTimeout(2000);
+        await this.page.waitForLoadState('load', { timeout: 15000 }).catch(() => { });
         // Handle any initial popups (app-install interstitial, location prompt)
         await this.handleInitialPopups();
     }
@@ -68,14 +89,14 @@ export class BlinkitPlatform extends QuickCommercePlatform {
             const continueOnWeb = await this.page.$(this.selectors.continueOnWebLink);
             if (continueOnWeb) {
                 await continueOnWeb.click();
-                await this.page.waitForTimeout(1500);
+                await continueOnWeb.waitForElementState('hidden', { timeout: 5000 }).catch(() => { });
             }
             // "Select your location" modal - only appears if the session has no
             // saved location yet (a fresh/expired login).
             const useLocationBtn = await this.page.$(this.selectors.useLocationButton);
             if (useLocationBtn) {
                 await useLocationBtn.click();
-                await this.page.waitForTimeout(2000);
+                await useLocationBtn.waitForElementState('hidden', { timeout: 8000 }).catch(() => { });
             }
         }
         catch {
@@ -110,6 +131,20 @@ export class BlinkitPlatform extends QuickCommercePlatform {
             return { loggedIn: false };
         }
     }
+    async sendOtp(phone) {
+        const page = this.page;
+        if (!page)
+            throw new Error('Platform not initialized');
+        await page.goto(this.baseUrl, { waitUntil: 'domcontentloaded', timeout: 30000 });
+        await this.handleInitialPopups();
+        const phoneInput = page.locator(this.selectors.phoneInput);
+        if (!(await phoneInput.count())) {
+            await page.locator(this.selectors.profileIcon).first().click();
+        }
+        await phoneInput.first().fill(phone, { timeout: 10000 });
+        await page.locator(this.selectors.continueButton).first().click();
+        return page.locator(this.selectors.otpInput).first().waitFor({ timeout: 15000 }).then(() => true, () => false);
+    }
     async submitOtp(otp) {
         if (!this.page)
             throw new Error('Platform not initialized');
@@ -123,7 +158,7 @@ export class BlinkitPlatform extends QuickCommercePlatform {
             // auto-advances focus through the rest (see scripts/auto-login-blinkit.ts).
             await otpInput.click();
             await this.page.keyboard.type(otp);
-            await this.page.waitForTimeout(3000);
+            await this.page.locator(this.selectors.otpInput).first().waitFor({ state: 'hidden', timeout: 15000 }).catch(() => { });
             const loginCheck = await this.checkLogin();
             if (loginCheck.loggedIn) {
                 await this.saveSession();
@@ -153,14 +188,18 @@ export class BlinkitPlatform extends QuickCommercePlatform {
         try {
             // Delivery location is the account's live address (change it with
             // select_address); the /s/?q= page doesn't take a location override.
-            await this.page.goto(`${this.baseUrl}/s/?q=${encodeURIComponent(query)}`, {
-                waitUntil: 'domcontentloaded',
-                timeout: 30000,
-            });
             // Results render after a skeleton that can outlast a fixed delay on a
-            // cold page; a timeout here just means no results.
-            await this.page.waitForSelector(this.selectors.productName, { timeout: 15000 }).catch(() => { });
-            const products = await this.extractProductResults();
+            // cold page; a timeout just means no results yet, so retry once with a
+            // fresh navigation before reporting an empty list.
+            let products = [];
+            for (let attempt = 0; attempt < 2 && products.length === 0; attempt++) {
+                await this.page.goto(`${this.baseUrl}/s/?q=${encodeURIComponent(query)}`, {
+                    waitUntil: 'domcontentloaded',
+                    timeout: 30000,
+                });
+                await this.page.waitForSelector(this.selectors.productName, { timeout: 15000 }).catch(() => { });
+                products = await this.extractProductResults();
+            }
             return {
                 query,
                 platform: this.name,
@@ -284,18 +323,18 @@ export class BlinkitPlatform extends QuickCommercePlatform {
                 console.log('Add to cart button not found');
                 return false;
             }
-            await addButton.click();
-            await this.page.waitForTimeout(1000);
-            // Handle quantity increment if quantity > 1 (ADD button turns into a
-            // -/qty/+ stepper after the first click).
-            if (quantity > 1) {
-                for (let i = 1; i < quantity; i++) {
-                    const incrementBtn = await product.$(this.selectors.incrementButton);
-                    if (incrementBtn) {
-                        await incrementBtn.click();
-                        await this.page.waitForTimeout(500);
-                    }
-                }
+            await this.afterChange(() => addButton.click());
+            // The ADD button turns into a -/qty/+ stepper once the item is in the cart;
+            // if it doesn't (e.g. out of stock), the add failed.
+            const stepper = await product.waitForSelector(this.selectors.incrementButton, { timeout: 5000 }).catch(() => null);
+            if (!stepper) {
+                console.log('Item did not land in cart:', productId);
+                return false;
+            }
+            for (let i = 1; i < quantity; i++) {
+                const incrementBtn = await product.waitForSelector(this.selectors.incrementButton, { timeout: 5000 }).catch(() => null);
+                if (incrementBtn)
+                    await this.afterChange(() => incrementBtn.click());
             }
             return true;
         }
@@ -308,7 +347,8 @@ export class BlinkitPlatform extends QuickCommercePlatform {
         if (!this.page)
             return;
         await this.page.goto(`${this.baseUrl}/cart`, { waitUntil: 'domcontentloaded', timeout: 30000 });
-        await this.page.waitForTimeout(3000);
+        await this.page.waitForLoadState('networkidle', { timeout: 8000 }).catch(() => { });
+        await this.page.locator(this.selectors.cartItems).first().waitFor({ timeout: 5000 }).catch(() => { });
     }
     async getCart() {
         if (!this.page)
@@ -316,23 +356,16 @@ export class BlinkitPlatform extends QuickCommercePlatform {
         try {
             await this.openCart();
             const cartItems = await this.extractCartItems();
-            // Bill rows (Items total / Delivery charge / Handling charge / Grand
-            // total) share one container; match by label text next to it.
-            const billValue = async (label) => {
-                const row = this.page.locator(this.selectors.billRow).filter({
-                    has: this.page.locator(this.selectors.billLabel, { hasText: label }),
-                });
-                const text = await row.locator(this.selectors.billValue).first().textContent().catch(() => null);
-                return text ? this.parsePrice(text) : 0;
-            };
-            const subtotal = await billValue('Items total');
-            const total = await billValue('Grand total');
+            const rows = await this.page.locator(this.selectors.billRow).evaluateAll(e => e.map(x => x.innerText));
+            const { subtotal, total, fees } = parseBill(rows);
             return {
                 platform: this.name,
                 items: cartItems,
                 subtotal: subtotal || cartItems.reduce((sum, item) => sum + item.price * item.cartQuantity, 0),
                 deliveryFee: total && subtotal ? total - subtotal : 0,
+                fees,
                 total: total || subtotal,
+                notice: storeNotice(await this.page.locator('body').innerText().catch(() => '')),
             };
         }
         catch (error) {
@@ -395,8 +428,7 @@ export class BlinkitPlatform extends QuickCommercePlatform {
                     await row.waitFor({ timeout: 5000 }).catch(() => { });
                 if ((await row.count()) === 0)
                     return i > 0;
-                await row.locator(this.selectors.cartStepperMinus).click();
-                await this.page.waitForTimeout(1000);
+                await this.afterChange(() => row.locator(this.selectors.cartStepperMinus).click());
             }
             return false;
         }
@@ -411,11 +443,10 @@ export class BlinkitPlatform extends QuickCommercePlatform {
         try {
             await this.openCart();
             for (let i = 0; i < 100; i++) {
-                const minus = await this.page.$(`${this.selectors.cartItems} ${this.selectors.cartStepperMinus}`);
-                if (!minus)
+                const minus = this.page.locator(`${this.selectors.cartItems} ${this.selectors.cartStepperMinus}`).first();
+                if ((await minus.count()) === 0)
                     return true;
-                await minus.click();
-                await this.page.waitForTimeout(1000);
+                await this.afterChange(() => minus.click());
             }
             return false;
         }
@@ -427,28 +458,257 @@ export class BlinkitPlatform extends QuickCommercePlatform {
     async openAddressPicker() {
         const page = this.page;
         await page.goto(this.baseUrl, { waitUntil: 'domcontentloaded', timeout: 30000 });
-        await page.waitForTimeout(4000);
-        await page.locator('[class*="LocationBar__Subtitle"]').first().click({ timeout: 8000, force: true });
+        const bar = page.locator('[class*="LocationBar__Subtitle"]').first();
+        await bar.waitFor({ timeout: 15000 });
+        await bar.click({ timeout: 8000, force: true });
         const cards = page.locator('[class*="AddressListItem__AddressItemWrapperItem"]');
         await cards.first().waitFor({ timeout: 8000 });
         return cards;
     }
-    async getOrderPreview() {
-        const cart = await this.getCart();
-        if (!cart)
-            return null;
-        return {
-            cart,
-            address: null,
-            paymentMethods: ['Wallet', 'UPI', 'Card', 'Cash on Delivery'],
-        };
+    selectedAddress;
+    async selectAddress(addressId, retried = false) {
+        const addr = (await this.getAddresses())[Number(addressId)];
+        const lat = async () => (await this.page.context().cookies()).find(c => c.name === 'gr_1_lat')?.value ?? '';
+        const before = await lat();
+        const ok = await super.selectAddress(addressId, retried);
+        if (ok) {
+            this.selectedAddress = addr;
+            // Blinkit applies the new location (gr_1_lat/lon cookies) ~2s after the picker
+            // closes. Re-selecting the current address changes nothing; the 6s cap covers that.
+            const deadline = Date.now() + 6000;
+            while (Date.now() < deadline && (await lat()) === before) {
+                await this.page.waitForResponse(() => true, { timeout: 500 }).catch(() => { });
+            }
+        }
+        return ok;
     }
-    async placeOrder(paymentMethod) {
-        // Safety: Never auto-place orders
-        return {
-            success: false,
-            message: 'Order placement requires manual confirmation for safety',
-        };
+    // ponytail: raw page text of the newest order's detail view; no structured parsing until the layout is known.
+    async getLatestOrder() {
+        const page = this.page;
+        if (!page)
+            throw new Error('Platform not initialized');
+        await page.goto('https://blinkit.com/account/orders', { waitUntil: 'domcontentloaded', timeout: 45000 });
+        const card = page.getByText(/₹\d+\s*•/).first();
+        if (!(await card.waitFor({ timeout: 15000 }).then(() => true, () => false)))
+            return null;
+        const list = (await page.locator('body').innerText()).replace(/\s+/g, ' ');
+        // The ₹ line sits inside the card; click the whole card (nearest clickable ancestor).
+        await card.locator('xpath=ancestor::*[self::a or @role="button" or @onclick][1]').click({ timeout: 3000 })
+            .catch(() => card.click({ timeout: 3000 }).catch(() => { }));
+        await page.waitForFunction(l => { const t = document.body.innerText.replace(/\s+/g, ' '); return t !== l && t.length > 80; }, list, { timeout: 15000 }).catch(() => { });
+        const detail = (await page.locator('body').innerText().catch(() => '')).replace(/\s+/g, ' ');
+        return `List: ${list.slice(0, 400)}\nLatest order detail: ${detail.slice(0, 1500)}`;
+    }
+    async getOrderPreview() {
+        if (!this.page)
+            throw new Error('Platform not initialized');
+        const cart = await this.getCart();
+        if (!cart || cart.items.length === 0)
+            return null;
+        try {
+            // Proceed -> saved-address list -> pick one -> Proceed To Pay -> payment
+            // iframe (Zomato paykit). Nothing is charged until a method is confirmed.
+            // The checkout list defaults to its first row and marks no selection, so
+            // pick the row matching the address chosen via selectAddress (if any).
+            // If the cart already has an address attached, the footer shows
+            // "Delivering to X" + "Proceed To Pay" and skips the list.
+            const payBtn = this.page.getByText(/^Proceed To Pay/).last();
+            const proceed = this.page.getByText('Proceed', { exact: true }).last();
+            const first = await Promise.race([
+                proceed.waitFor({ timeout: 8000 }).then(() => 'list'),
+                payBtn.waitFor({ timeout: 8000 }).then(() => 'pay'),
+            ]).catch(() => null);
+            let address = '';
+            const selected = this.selectedAddress;
+            const wanted = selected?.addressLine1.split(',')[0];
+            const readFooter = async () => (await this.page.getByText(/Delivering to/).first().locator('xpath=../..').innerText({ timeout: 3000 }).catch(() => ''))
+                .replace(/\s*\n\s*/g, ', ').replace(/^.*?Delivering to,?\s*/, '').replace(/,?\s*Change.*$/, '');
+            // The cart keeps the address from its last checkout, even after the header
+            // location changes, so a stale footer must be switched via "Change".
+            let useList = first === 'list';
+            if (first === 'pay') {
+                address = await readFooter();
+                if (wanted && !address.toLowerCase().includes(wanted.toLowerCase())) {
+                    await this.page.getByText('Change', { exact: true }).last().click({ timeout: 5000 });
+                    useList = true;
+                }
+            }
+            if (useList) {
+                if (first === 'list')
+                    await proceed.click({ timeout: 8000 });
+                const all = this.page.locator('[class*="AddressList__AddressLists"] > *');
+                await all.first().waitFor({ timeout: 8000 });
+                const match = selected ? all.filter({ hasText: wanted }).filter({ hasText: selected.label }) : all;
+                const row = (await match.count()) > 0 ? match.first() : all.first();
+                address = (await row.innerText()).replace(/\s*\n\s*/g, ', ');
+                await row.click();
+            }
+            await payBtn.click({ timeout: 10000 });
+            const frameEl = this.page.locator('iframe[src*="zpaykit"]').first();
+            await frameEl.waitFor({ timeout: 15000 });
+            const frame = this.page.frameLocator('iframe[src*="zpaykit"]').first();
+            await frame.getByText(/UPI/).first().waitFor({ timeout: 15000 });
+            // Panels are accordions (opening one collapses the other), so open the
+            // ones that hide options and accumulate their text.
+            let text = await frame.locator('body').innerText();
+            for (const title of ['Wallets', 'UPI']) {
+                const head = frame.locator('h5', { hasText: new RegExp(`^${title}$`) }).first();
+                if (!(await head.count()))
+                    continue;
+                await head.click({ timeout: 3000 }).catch(() => { });
+                await frame.getByText(title === 'UPI' ? /Select UPI APP/i : /LINK|Mobikwik|Paytm/i).first().waitFor({ timeout: 4000 }).catch(() => { });
+                text += '\n' + (await frame.locator('body').innerText());
+            }
+            const paymentMethods = this.scanPaymentMethods(text);
+            // The "Cash" panel always carries a "not available below ₹50" note, so
+            // trust its enabled state instead (it can be disabled for other reasons too).
+            const cash = frame.locator('[role="button"][aria-label="Cash"]').first();
+            if ((await cash.count()) && (await cash.getAttribute('aria-disabled')) !== 'true')
+                paymentMethods.push('Cash on Delivery');
+            return { cart, address, paymentMethods };
+        }
+        catch (error) {
+            console.error('Error getting order preview:', error);
+            const body = await this.page.locator('body').innerText().catch(() => '');
+            const m = body.match(/[^\n]*(?:not serviceable|unserviceable|not available in your new location|doesn't deliver|not delivering|can't deliver)[^\n]*/i);
+            if (m)
+                throw new Error(`Address not serviceable on Blinkit: ${m[0].trim()}`);
+            // Blinkit drops items it finds out of stock at checkout ("1 out of stock item removed"),
+            // so the cart changed under us; the caller must re-read the cart and re-add.
+            if (/out of stock items? removed/i.test(body))
+                throw new Error('Blinkit removed an out-of-stock item from the cart at checkout; re-check the cart and add the item again or pick another');
+            if (/out of stock item/i.test(body))
+                throw new Error('Cart has an out-of-stock item on Blinkit; remove it before checkout');
+            return null;
+        }
+    }
+    armedTotal;
+    armedCard;
+    // CVV comes from env var QC_CVV_<last4> (set in the MCP client's env block); never logged.
+    // ponytail: plaintext env var, move to the keychain when hardening.
+    readCvv(last4) {
+        return process.env[`QC_CVV_${last4}`]?.trim() || undefined;
+    }
+    /** Saved card: selecting a card and typing the CVV creates no order on Blinkit, so step 1 stops at the ready "Pay Now". */
+    async placeCardOrder(confirm, last4) {
+        const page = this.page;
+        const frame = page.frameLocator('iframe[src*="zpaykit"]').first();
+        const payNow = page.getByText(/^Pay Now/).last();
+        const cvvInput = frame.locator('input[type="password"]');
+        if (!confirm) {
+            this.armedTotal = undefined;
+            this.armedCard = undefined;
+            if (!last4 || !/^\d{4}$/.test(last4))
+                return { success: false, message: 'Pass card_last4 (last 4 digits of a saved card).' };
+            const cvv = this.readCvv(last4);
+            if (!cvv)
+                return { success: false, message: `No CVV configured for card ending ${last4}: set env var QC_CVV_${last4} in the MCP server config.` };
+            const preview = await this.getOrderPreview();
+            if (!preview)
+                return { success: false, message: 'Could not reach checkout (empty cart?).' };
+            const label = preview.paymentMethods.find(m => m.endsWith('••' + last4));
+            if (!label)
+                return { success: false, message: `No saved card ending ${last4} on Blinkit. Saved: ${preview.paymentMethods.filter(m => m.includes('••')).join(', ') || 'none'}.` };
+            // The saved cards sit under the "Add credit or debit cards" accordion.
+            const row = frame.getByText(label.split(' ••')[0], { exact: false }).first();
+            if (!(await row.isVisible().catch(() => false))) {
+                await frame.getByText('Add credit or debit cards', { exact: false }).first().click({ timeout: 5000 });
+            }
+            await row.click({ timeout: 8000 });
+            await cvvInput.fill(cvv, { timeout: 8000 });
+            await payNow.waitFor({ timeout: 5000 });
+            this.armedTotal = preview.cart.total;
+            this.armedCard = label;
+            return { success: false, ready: true, total: preview.cart.total, message: `Saved card ${label} selected with CVV filled; stopped before "Pay Now".` };
+        }
+        if (this.armedTotal === undefined || !this.armedCard)
+            return { success: false, message: 'Checkout is not armed; run the first step again.' };
+        const label = this.armedCard;
+        this.armedTotal = undefined;
+        this.armedCard = undefined; // one shot
+        if (!(await cvvInput.inputValue().catch(() => '')) || !(await payNow.isVisible().catch(() => false))) {
+            return { success: false, message: 'Checkout screen changed since the preview; nothing was charged. Run the first step again.' };
+        }
+        await payNow.click({ timeout: 5000 });
+        // ponytail: post-payment page (3DS/OTP/success) not observed yet; report what shows.
+        await page.waitForLoadState('domcontentloaded').catch(() => { });
+        const text = (await page.locator('body').innerText().catch(() => '')).replace(/\s+/g, ' ').slice(0, 300);
+        const image = await page.screenshot().catch(() => undefined);
+        return { success: true, image, message: `"Pay Now" clicked for ${label}. Page now shows: ${text}` };
+    }
+    /** UPI collect: fill the VPA, stop before "Checkout" (which sends the request to the phone). */
+    async placeUpiOrder(confirm, upiId) {
+        const page = this.page;
+        const frame = page.frameLocator('iframe[src*="zpaykit"]').first();
+        const vpa = frame.locator('input[type="text"]:visible').first();
+        const checkout = frame.locator('button:visible', { hasText: /^Checkout$/ }).first();
+        if (!confirm) {
+            this.armedTotal = undefined;
+            if (!upiId || !/^[\w.\-]{2,}@[a-zA-Z]{2,}$/.test(upiId))
+                return { success: false, message: 'upi_id is required, e.g. name@bank.' };
+            const preview = await this.getOrderPreview();
+            if (!preview)
+                return { success: false, message: 'Could not reach checkout (empty cart?).' };
+            await frame.getByText('Add new UPI ID').first().click({ timeout: 5000 });
+            await vpa.fill(upiId, { timeout: 5000 });
+            await checkout.waitFor({ timeout: 5000 });
+            this.armedTotal = preview.cart.total;
+            return { success: false, ready: true, total: preview.cart.total, message: `UPI ID entered; stopped before "Checkout" (sends a collect request to ${upiId}).` };
+        }
+        if (this.armedTotal === undefined)
+            return { success: false, message: 'Checkout is not armed; run the first step again.' };
+        this.armedTotal = undefined; // one shot
+        if (!(await vpa.inputValue().catch(() => '')) || !(await checkout.isVisible().catch(() => false))) {
+            return { success: false, message: 'Checkout screen changed since the preview; nothing was requested. Run the first step again.' };
+        }
+        await checkout.click({ timeout: 5000 });
+        // The user approves on their phone; wait for the page to leave checkout or show an outcome.
+        // ponytail: outcome strings are a guess until observed live; raw page text is always returned.
+        const outcome = 'order (placed|confirmed)|payment (successful|failed|unsuccessful|declined)|request (expired|declined)|try again';
+        const done = await page.waitForFunction((src) => !location.href.includes('checkout') || new RegExp(src, 'i').test(document.body.innerText), outcome, { timeout: 180_000 }).then(() => true, () => false);
+        const text = (await page.locator('body').innerText().catch(() => '')).replace(/\s+/g, ' ').slice(0, 300);
+        const ok = done && !/fail|declin|expired|try again|unsuccessful/i.test(text);
+        return { success: ok, message: done ? `After the collect request, page shows: ${text}` : `No outcome within 3 min (request not approved?). Page shows: ${text}` };
+    }
+    // detail = UPI ID for 'upi', last 4 digits of a saved card for 'card'.
+    async placeOrder(paymentMethod, confirm = false, upiId) {
+        if (!this.page)
+            throw new Error('Platform not initialized');
+        if (paymentMethod === 'upi')
+            return this.placeUpiOrder(confirm, upiId);
+        if (paymentMethod === 'card')
+            return this.placeCardOrder(confirm, upiId);
+        if (paymentMethod !== 'cod')
+            return { success: false, message: 'Only "cod", "upi" and "card" are supported on Blinkit.' };
+        const frame = this.page.frameLocator('iframe[src*="zpaykit"]').first();
+        const payNow = this.page.getByText(/^Pay Now/).last();
+        if (!confirm) {
+            this.armedTotal = undefined;
+            const preview = await this.getOrderPreview();
+            if (!preview)
+                return { success: false, message: 'Could not reach checkout (empty cart?).' };
+            if (!preview.paymentMethods.includes('Cash on Delivery')) {
+                return { success: false, message: 'Cash on Delivery is not enabled for this cart (Blinkit needs an items subtotal of at least ₹50).' };
+            }
+            await frame.locator('[role="button"][aria-label="Cash"]').first().click({ timeout: 5000 });
+            await frame.getByText(/exact change/i).first().waitFor({ timeout: 8000 });
+            await payNow.waitFor({ timeout: 5000 });
+            this.armedTotal = preview.cart.total;
+            return { success: false, ready: true, total: preview.cart.total, message: 'Cash selected; stopped before "Pay Now".' };
+        }
+        if (this.armedTotal === undefined)
+            return { success: false, message: 'Checkout is not armed; run the first step again.' };
+        this.armedTotal = undefined; // one shot, even if the click fails
+        // Still on the Cash-selected payment screen?
+        const stillThere = await frame.getByText(/exact change/i).first().isVisible().catch(() => false);
+        if (!stillThere || !(await payNow.isVisible().catch(() => false))) {
+            return { success: false, message: 'Checkout screen changed since the preview; nothing was charged. Run the first step again.' };
+        }
+        await payNow.click({ timeout: 5000 });
+        // ponytail: success signal not yet observed live; report page text for the caller to judge.
+        await this.page.waitForLoadState('domcontentloaded').catch(() => { });
+        const text = (await this.page.locator('body').innerText().catch(() => '')).replace(/\s+/g, ' ').slice(0, 200);
+        return { success: true, message: `"Pay Now" clicked. Page now shows: ${text}` };
     }
 }
 //# sourceMappingURL=blinkit.js.map

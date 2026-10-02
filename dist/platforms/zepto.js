@@ -1,5 +1,27 @@
 import { QuickCommercePlatform, } from './base.js';
 import { sessionPath, ensureSessionDir } from '../session-helper.js';
+import { storeNotice } from '../ranking.js';
+/** Zepto bill rows: "Item Total ₹125 ₹123", "Delivery Fee ₹30", "Handling Fee ₹10 FREE" (waived = 0). */
+export function parseZeptoBill(rows) {
+    let subtotal = 0, total = 0;
+    const fees = [];
+    for (const r of rows) {
+        const text = r.replace(/\s+/g, ' ').trim();
+        const i = text.indexOf('₹');
+        if (i < 0)
+            continue;
+        const label = text.slice(0, i).trim();
+        const amounts = [...text.matchAll(/₹\s*([\d,]+(?:\.\d+)?)/g)].map(m => Number(m[1].replace(/,/g, '')));
+        const amount = amounts[amounts.length - 1];
+        if (/^item total/i.test(label))
+            subtotal = amount;
+        else if (/^to pay/i.test(label))
+            total = amount;
+        else if (/(fee|charge|tip|donation)s?$/i.test(label) && !/^(savings|discount)/i.test(label) && !/\bfree\b/i.test(text) && amount)
+            fees.push({ label, amount });
+    }
+    return { subtotal, total, fees };
+}
 export class ZeptoPlatform extends QuickCommercePlatform {
     // Verified against the live site with an authenticated session
     // (scripts/inspect-selectors.ts inspectZeptoAuthenticated) on 2026-09-28.
@@ -56,8 +78,7 @@ export class ZeptoPlatform extends QuickCommercePlatform {
             console.error('💡 Tip: Use interactive login mode to save an authenticated session:');
             console.error('   npx tsx src/session-helper.ts login zepto');
         }
-        // Wait for initial load
-        await this.page.waitForTimeout(2000);
+        await this.page.waitForLoadState('load', { timeout: 15000 }).catch(() => { });
         // Check for blocked page
         const blockedEl = await this.page.$(this.selectors.blockedPage);
         if (blockedEl) {
@@ -107,6 +128,20 @@ export class ZeptoPlatform extends QuickCommercePlatform {
             return { loggedIn: false };
         }
     }
+    async sendOtp(phone) {
+        const page = this.page;
+        if (!page)
+            throw new Error('Platform not initialized');
+        await page.goto(this.baseUrl, { waitUntil: 'domcontentloaded', timeout: 45000 });
+        const tel = page.locator('input[type="tel"][placeholder*="Phone" i]');
+        if (!(await tel.count()))
+            await page.locator(this.selectors.loginButton).first().click();
+        await tel.waitFor({ timeout: 15000 });
+        await tel.click();
+        await tel.pressSequentially(phone, { delay: 80 });
+        await page.locator('button[type="submit"]:has-text("Continue")').click();
+        return page.locator(this.selectors.otpInput).first().waitFor({ timeout: 15000 }).then(() => true, () => false);
+    }
     async submitOtp(otp) {
         if (!this.page)
             throw new Error('Platform not initialized');
@@ -122,7 +157,7 @@ export class ZeptoPlatform extends QuickCommercePlatform {
             const verifyButton = await this.page.$('button:has-text("Verify"), button:has-text("Submit")');
             if (verifyButton) {
                 await verifyButton.click();
-                await this.page.waitForTimeout(3000);
+                await this.page.locator(this.selectors.otpInput).first().waitFor({ state: 'hidden', timeout: 15000 }).catch(() => { });
             }
             // Check if login succeeded
             const loginCheck = await this.checkLogin();
@@ -241,17 +276,17 @@ export class ZeptoPlatform extends QuickCommercePlatform {
                 console.log('Add to cart button not found');
                 return false;
             }
-            await addButton.click();
-            await this.page.waitForTimeout(1000);
-            // Handle quantity if > 1
-            if (quantity > 1) {
-                for (let i = 1; i < quantity; i++) {
-                    const incrementButton = await product.$(this.selectors.incrementButton);
-                    if (incrementButton) {
-                        await incrementButton.click();
-                        await this.page.waitForTimeout(500);
-                    }
-                }
+            await this.afterChange(() => addButton.click());
+            // The ADD button turns into a stepper once the item is in the cart.
+            const stepper = await product.waitForSelector(this.selectors.incrementButton, { timeout: 5000 }).catch(() => null);
+            if (!stepper) {
+                console.log('Item did not land in cart:', productId);
+                return false;
+            }
+            for (let i = 1; i < quantity; i++) {
+                const incrementButton = await product.waitForSelector(this.selectors.incrementButton, { timeout: 5000 }).catch(() => null);
+                if (incrementButton)
+                    await this.afterChange(() => incrementButton.click());
             }
             return true;
         }
@@ -264,7 +299,12 @@ export class ZeptoPlatform extends QuickCommercePlatform {
         if (!this.page)
             return;
         await this.page.goto(`${this.baseUrl}/cart`, { waitUntil: 'domcontentloaded', timeout: 30000 });
-        await this.page.waitForTimeout(3000);
+        // Cart is ready once either a row or the bill summary renders.
+        await this.page
+            .locator(`${this.selectors.cartItems}, ${this.selectors.billToPay}`)
+            .first()
+            .waitFor({ timeout: 10000 })
+            .catch(() => { });
     }
     // Bill rows can hold a strikethrough original price alongside the final
     // one (e.g. "₹229 ₹184"); take the last ₹ amount as the actual value.
@@ -278,16 +318,19 @@ export class ZeptoPlatform extends QuickCommercePlatform {
         try {
             await this.openCart();
             const cartItems = await this.extractCartItems();
-            const itemTotalText = await this.page.locator(this.selectors.billItemTotal).first().textContent().catch(() => null);
-            const toPayText = await this.page.locator(this.selectors.billToPay).first().textContent().catch(() => null);
-            const subtotal = itemTotalText ? this.lastPrice(itemTotalText) : cartItems.reduce((sum, item) => sum + item.price * item.cartQuantity, 0);
-            const total = toPayText ? this.lastPrice(toPayText) : subtotal;
+            const rows = await this.page.locator('div.flex.justify-between').evaluateAll(e => e.map(x => x.innerText));
+            const bill = parseZeptoBill(rows);
+            const subtotal = bill.subtotal || cartItems.reduce((sum, item) => sum + item.price * item.cartQuantity, 0);
+            const total = bill.total || subtotal;
+            const fees = bill.fees;
             return {
                 platform: this.name,
                 items: cartItems,
                 subtotal,
                 deliveryFee: total - subtotal,
+                fees,
                 total,
+                notice: storeNotice(await this.page.locator('body').innerText().catch(() => '')),
             };
         }
         catch (error) {
@@ -346,8 +389,7 @@ export class ZeptoPlatform extends QuickCommercePlatform {
                     await row.waitFor({ timeout: 5000 }).catch(() => { });
                 if ((await row.count()) === 0)
                     return i > 0;
-                await row.locator(this.selectors.cartItemMinus).click();
-                await this.page.waitForTimeout(1000);
+                await this.afterChange(() => row.locator(this.selectors.cartItemMinus).click());
             }
             return false;
         }
@@ -362,11 +404,10 @@ export class ZeptoPlatform extends QuickCommercePlatform {
         try {
             await this.openCart();
             for (let i = 0; i < 100; i++) {
-                const minus = await this.page.$(`${this.selectors.cartItems} ${this.selectors.cartItemMinus}`);
-                if (!minus)
+                const minus = this.page.locator(`${this.selectors.cartItems} ${this.selectors.cartItemMinus}`).first();
+                if ((await minus.count()) === 0)
                     return true;
-                await minus.click();
-                await this.page.waitForTimeout(1000);
+                await this.afterChange(() => minus.click());
             }
             return false;
         }
@@ -378,29 +419,164 @@ export class ZeptoPlatform extends QuickCommercePlatform {
     async openAddressPicker() {
         const page = this.page;
         await page.goto(this.baseUrl, { waitUntil: 'domcontentloaded', timeout: 30000 });
-        await page.waitForTimeout(4000);
+        const header = page.locator('[data-testid="user-address"]').first();
+        await header.waitFor({ timeout: 15000 });
         await page.keyboard.press('Escape'); // promo popups intercept the header click
-        await page.locator('[data-testid="user-address"]').first().click({ timeout: 8000 });
+        await header.click({ timeout: 8000 });
         const cards = page.locator('[data-testid="address-item"]');
         await cards.first().waitFor({ timeout: 8000 });
         return cards;
     }
-    async getOrderPreview() {
-        const cart = await this.getCart();
-        if (!cart)
-            return null;
-        return {
-            cart,
-            address: null, // Would extract from page
-            paymentMethods: ['Wallet', 'UPI', 'Card'],
-        };
+    // ponytail: order list text only (status, total, time per order); no detail page parsing.
+    async getLatestOrder() {
+        const page = this.page;
+        if (!page)
+            throw new Error('Platform not initialized');
+        const seen = page.getByText(/₹\d+/).first();
+        // First cold load of /account/orders often renders blank; retry with a fresh navigation.
+        for (let i = 0; i < 2; i++) {
+            await page.goto(`${this.baseUrl}/account/orders`, { waitUntil: 'domcontentloaded', timeout: 45000 }).catch(() => { });
+            if (await seen.waitFor({ timeout: 15000 }).then(() => true, () => false)) {
+                return (await page.locator('body').innerText()).replace(/\s+/g, ' ').slice(0, 600);
+            }
+        }
+        return null;
     }
-    async placeOrder(paymentMethod) {
-        console.log('Place order not yet implemented - requires user confirmation');
-        return {
-            success: false,
-            message: 'Order placement requires manual confirmation for safety',
-        };
+    async getOrderPreview() {
+        if (!this.page)
+            throw new Error('Platform not initialized');
+        const cart = await this.getCart();
+        if (!cart || cart.items.length === 0)
+            return null;
+        try {
+            // The payment sheet is a panel on the cart page (not an iframe); its
+            // header carries the delivery address, followed by the payment options.
+            await this.page.getByText('PAYING VIA', { exact: false }).first().click({ timeout: 8000 });
+            await this.page.getByText('Pay by UPI').first().waitFor({ timeout: 10000 });
+            const lines = (await this.page.locator('body').innerText()).split('\n').map(l => l.trim()).filter(Boolean);
+            const at = lines.indexOf('Payment Options');
+            const address = at >= 0 ? lines[at + 1] ?? '' : '';
+            return { cart, address, paymentMethods: this.scanPaymentMethods(lines.join('\n')) };
+        }
+        catch (error) {
+            console.error('Error getting order preview:', error);
+            return null;
+        }
+    }
+    armedTotal;
+    // detail = last 4 digits of a saved card, for paymentMethod 'card'.
+    async placeOrder(paymentMethod, confirm = false, detail) {
+        if (!this.page)
+            throw new Error('Platform not initialized');
+        if (paymentMethod === 'upi_qr')
+            return this.placeQrOrder(confirm);
+        if (paymentMethod === 'card')
+            return this.placeCardOrder(confirm, detail);
+        if (paymentMethod !== 'cod')
+            return { success: false, message: 'Only "cod", "upi_qr" and "card" are supported on Zepto.' };
+        // Selecting the COD row reveals a "Pay ₹N on delivery" bar: that is the final click.
+        const payBar = this.page.getByText(/^Pay ₹\d+ on delivery/).last();
+        if (!confirm) {
+            this.armedTotal = undefined;
+            const preview = await this.getOrderPreview();
+            if (!preview)
+                return { success: false, message: 'Could not reach checkout (empty cart?).' };
+            if (!preview.paymentMethods.includes('Cash on Delivery')) {
+                return { success: false, message: 'Cash on Delivery is not offered for this cart on Zepto.' };
+            }
+            await this.page.locator('[class*="_cod-widget__row"]').first().click({ timeout: 5000 });
+            await payBar.waitFor({ timeout: 5000 });
+            this.armedTotal = preview.cart.total;
+            return { success: false, ready: true, total: preview.cart.total, message: 'COD selected; stopped before "Pay on delivery".' };
+        }
+        if (this.armedTotal === undefined)
+            return { success: false, message: 'Checkout is not armed; run the first step again.' };
+        this.armedTotal = undefined; // one shot, even if the click fails
+        if (!(await payBar.isVisible().catch(() => false))) {
+            return { success: false, message: 'Checkout screen changed since the preview; nothing was charged. Run the first step again.' };
+        }
+        await payBar.click({ timeout: 5000 });
+        // ponytail: success signal not yet observed live; report page text for the caller to judge.
+        await this.page.waitForLoadState('domcontentloaded').catch(() => { });
+        const text = (await this.page.locator('body').innerText().catch(() => '')).replace(/\s+/g, ' ').slice(0, 200);
+        return { success: true, message: `"Pay on delivery" clicked. Page now shows: ${text}` };
+    }
+    armedCard;
+    // CVV comes from env var QC_CVV_<last4> (set in the MCP client's env block); never logged.
+    // ponytail: plaintext env var, move to the keychain when hardening.
+    readCvv(last4) {
+        return process.env[`QC_CVV_${last4}`]?.trim() || undefined;
+    }
+    /** Saved card: selecting the card row creates the pending order, so step 1 only verifies; step 2 selects, fills CVV, pays. */
+    async placeCardOrder(confirm, last4) {
+        const page = this.page;
+        if (!confirm) {
+            this.armedTotal = undefined;
+            this.armedCard = undefined;
+            if (!last4 || !/^\d{4}$/.test(last4))
+                return { success: false, message: 'Pass card_last4 (last 4 digits of a saved card).' };
+            const cvv = this.readCvv(last4);
+            if (!cvv)
+                return { success: false, message: `No CVV configured for card ending ${last4}: set env var QC_CVV_${last4} in the MCP server config.` };
+            const preview = await this.getOrderPreview();
+            if (!preview)
+                return { success: false, message: 'Could not reach checkout (empty cart?).' };
+            const label = preview.paymentMethods.find(m => m.endsWith('••' + last4));
+            if (!label)
+                return { success: false, message: `No saved card ending ${last4} on Zepto. Saved: ${preview.paymentMethods.filter(m => m.includes('••')).join(', ') || 'none'}.` };
+            this.armedTotal = preview.cart.total;
+            this.armedCard = { label, cvv };
+            return { success: false, ready: true, total: preview.cart.total, message: `Saved card ${label} available; stopped before selecting it.` };
+        }
+        if (this.armedTotal === undefined || !this.armedCard)
+            return { success: false, message: 'Checkout is not armed; run the first step again.' };
+        const { label, cvv } = this.armedCard;
+        this.armedTotal = undefined;
+        this.armedCard = undefined; // one shot
+        await page.getByText(label.split(' ••')[0], { exact: false }).first().click({ timeout: 5000 });
+        // The "Make Payment" button appears once the card sheet (and its juspay iframes) is attached.
+        // Only one of the iframes holds the CVV field, so wait on whichever frame renders it.
+        await page.getByText('Make Payment', { exact: true }).first().waitFor({ timeout: 20000 });
+        const cvvInput = await Promise.any(page.frames().map(async (f) => {
+            const l = f.locator('input[name="security_code"]');
+            await l.waitFor({ timeout: 15000 });
+            return l;
+        }));
+        await cvvInput.fill(cvv);
+        await page.getByText('Make Payment', { exact: true }).first().click({ timeout: 5000 });
+        // ponytail: post-payment page (3DS/OTP/success) not observed yet; report what shows.
+        await page.waitForLoadState('domcontentloaded').catch(() => { });
+        const text = (await page.locator('body').innerText().catch(() => '')).replace(/\s+/g, ' ').slice(0, 300);
+        const image = await page.screenshot().catch(() => undefined);
+        return { success: true, image, message: `"Make Payment" clicked for ${label}. Page now shows: ${text}` };
+    }
+    /** UPI via QR: step 2 click creates a pending order and shows a QR (valid ~3.5 min) that the user scans. */
+    async placeQrOrder(confirm) {
+        const page = this.page;
+        if (!confirm) {
+            this.armedTotal = undefined;
+            const preview = await this.getOrderPreview();
+            if (!preview)
+                return { success: false, message: 'Could not reach checkout (empty cart?).' };
+            if (!preview.paymentMethods.includes('Pay via QR Code')) {
+                return { success: false, message: 'QR payment is not offered for this cart on Zepto.' };
+            }
+            this.armedTotal = preview.cart.total;
+            return { success: false, ready: true, total: preview.cart.total, message: 'QR payment available; stopped before selecting it.' };
+        }
+        if (this.armedTotal === undefined)
+            return { success: false, message: 'Checkout is not armed; run the first step again.' };
+        const total = this.armedTotal;
+        this.armedTotal = undefined; // one shot
+        await page.getByText(/QR/i).first().click({ timeout: 5000 });
+        const valid = page.getByText(/QR code is valid for/i);
+        await valid.waitFor({ timeout: 15000 });
+        const card = page.getByText(/Scan and pay using any UPI app/i).first()
+            .locator('xpath=ancestor::div[.//canvas or .//img or .//svg][1]');
+        const image = await card.screenshot({ timeout: 5000 }).catch(() => page.screenshot());
+        // ponytail: expiry from page text; payment result not polled yet (success detection comes later).
+        const expiry = (await valid.locator('xpath=..').innerText().catch(() => '')).replace(/\s+/g, ' ');
+        return { success: true, image, message: `QR shown for ₹${total}. ${expiry}. Ask the user to scan it with any UPI app; an unpaid order stays pending until it expires.` };
     }
 }
 //# sourceMappingURL=zepto.js.map

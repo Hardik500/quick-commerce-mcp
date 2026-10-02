@@ -3,7 +3,19 @@
  * URL: https://www.swiggy.com/instamart
  */
 import { BrowserContext, Locator } from 'playwright';
-import { QuickCommercePlatform, SearchResult, CartSummary } from './base.js';
+import { QuickCommercePlatform, SearchResult, CartSummary, OrderPreview } from './base.js';
+/**
+ * Instamart bill is one text line per cell: label, then "struck original, actual" or a single amount or "FREE"
+ * (e.g. "Handling Fee","₹12.83","₹12.00" / "Delivery Partner Fee","₹30.00","FREE"). Last amount is what's charged.
+ */
+export declare function parseInstamartBill(lines: string[]): {
+    subtotal: number;
+    total: number;
+    fees: {
+        label: string;
+        amount: number;
+    }[];
+};
 export declare class SwiggyInstamartPlatform extends QuickCommercePlatform {
     private selectors;
     constructor();
@@ -14,6 +26,7 @@ export declare class SwiggyInstamartPlatform extends QuickCommercePlatform {
         otpSent?: boolean;
         phone?: string;
     }>;
+    sendOtp(phone: string): Promise<boolean>;
     submitOtp(otp: string): Promise<boolean>;
     /** Persist cookies + localStorage so the next run starts already logged in. */
     saveSession(): Promise<void>;
@@ -27,7 +40,9 @@ export declare class SwiggyInstamartPlatform extends QuickCommercePlatform {
     removeFromCart(productId: string): Promise<boolean>;
     clearCart(): Promise<boolean>;
     protected openAddressPicker(): Promise<Locator>;
-    getOrderPreview(): Promise<any>;
-    placeOrder(paymentMethod: string): Promise<any>;
+    selectAddress(addressId: string, retried?: boolean): Promise<boolean>;
+    getOrderPreview(): Promise<OrderPreview | null>;
+    private armedTotal?;
+    placeOrder(paymentMethod: string, confirm?: boolean): Promise<any>;
 }
 //# sourceMappingURL=swiggy-instamart.d.ts.map

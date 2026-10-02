@@ -16,17 +16,17 @@ Universal quick commerce aggregation via MCP - compare and order from Zepto, Bli
 
 ## 🚀 Quick Start
 
-**Requirements:** Node 18+ and Google Chrome installed (the server drives your Chrome, no browser download).
+**Requirements:** Node 18+ and Google Chrome installed (the server drives your Chrome, no browser download). It runs locally over stdio, so it works in local MCP clients (Claude Desktop, Claude Code, Cursor, Windsurf), not hosted web apps.
 
-**1. Log in once per platform** (opens a browser; log in, then press Ctrl+C):
+**1. Add the server to your MCP client.** No install step; `npx` fetches it.
+
+Claude Code:
 
 ```bash
-npx -y -p quick-commerce-mcp quick-commerce-mcp-login zepto   # also: blinkit, swiggy-instamart
+claude mcp add quick-commerce -- npx -y quick-commerce-mcp
 ```
 
-Sessions are saved to `~/.quick-commerce-mcp/sessions/`.
-
-**2. Add the server to your MCP client** (Claude Desktop, Cursor, Windsurf):
+Claude Desktop, Cursor, Windsurf (add to the client's MCP config, then restart it):
 
 ```json
 {
@@ -39,9 +39,26 @@ Sessions are saved to `~/.quick-commerce-mcp/sessions/`.
 }
 ```
 
-Claude Code: `claude mcp add quick-commerce -- npx -y quick-commerce-mcp`
+**2. Set up from chat.** Ask your assistant, for example: "Save my phone 98XXXXXXXX and UPI me@bank, then log me in to Blinkit."
 
-**Setup from chat:** ask your assistant to run `set_preferences` (phone, UPI ID, default payment), `request_otp` then `submit_otp` to log in (an alternative to the CLI above), and `logout` to switch phone numbers. Preferences are saved in `~/.quick-commerce-mcp/preferences.json` and `place_order` uses them as defaults.
+| Tool | What it does |
+|------|--------------|
+| `set_preferences` | Save phone, UPI ID, default payment method (`cod`/`upi`/`upi_qr`/`card`). No args = read. Empty string = clear. Stored in `~/.quick-commerce-mcp/preferences.json` |
+| `check_login_status` | Is each platform logged in? |
+| `request_otp` | Enter the phone number on the platform and send the OTP SMS (phone defaults to the saved one) |
+| `submit_otp` | Complete login with the OTP you received |
+| `logout` | Delete a platform's saved session (use before switching phone numbers) |
+| `list_addresses` / `select_address` | Pick the delivery address |
+
+Then shop: `search_products`, `compare_prices`, `resolve_items`, `add_to_cart`, `get_cart_summary`, `get_order_preview`, and finally `place_order` (preview first, then confirm with the token). `place_order` uses your saved UPI ID and payment method unless you override them.
+
+Alternative login from a terminal (opens a browser; log in, then Ctrl+C):
+
+```bash
+npx -y -p quick-commerce-mcp quick-commerce-mcp-login zepto   # also: blinkit, swiggy-instamart
+```
+
+Sessions are saved to `~/.quick-commerce-mcp/sessions/` and expire eventually; just log in again.
 
 **3. Optional, for card payments:** export `QC_CVV_<last4>` in the client's `env` block. UPI needs no secret.
 
@@ -81,8 +98,8 @@ See [AUTHENTICATION.md](AUTHENTICATION.md) for how to log in to a platform and s
 
 ## 🔐 Security
 
-- **No payment info stored**: We only automate cart building
-- **OTP required**: You'll always enter OTP manually
+- **No card data stored**: CVV is read from env only; only phone/UPI ID preferences are saved locally
+- **OTP required**: You always supply the OTP yourself
 - **Confirm before order**: Preview shown, you confirm final purchase
 - **Session isolation**: Each platform login is separate
 
@@ -94,10 +111,10 @@ See [AUTHENTICATION.md](AUTHENTICATION.md) for how to log in to a platform and s
 │  /Cursor    │◀────│  (this repo) │◀────│  Automation │
 └─────────────┘     └─────────────┘     └──────┬──────┘
                                                 │
-                       ┌─────────┐    ┌─────────┴──────────┐
-                       │ SQLite  │    │                    │
-                       │  Cache  │    │ Zepto | Swiggy     │
-                       └─────────┘    └────────────────────┘
+                              ┌─────────┴──────────┐
+                              │ Zepto | Blinkit |  │
+                              │ Swiggy Instamart   │
+                              └────────────────────┘
 ```
 
 ## 📋 Roadmap

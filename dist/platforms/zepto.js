@@ -1,5 +1,6 @@
 import { QuickCommercePlatform, } from './base.js';
-import { sessionPath, ensureSessionDir, saveQrImage, QR_OPTS } from '../session-helper.js';
+import { sessionPath, ensureSessionDir, saveQrImage, openQrViewer, QR_OPTS } from '../session-helper.js';
+import { wantsQrViewer } from '../preferences.js';
 import { storeNotice } from '../ranking.js';
 import { selectorFor } from '../flows.js';
 /** Zepto bill rows: "Item Total ₹125 ₹123", "Delivery Fee ₹30", "Handling Fee ₹10 FREE" (waived = 0). */
@@ -753,13 +754,19 @@ export class ZeptoPlatform extends QuickCommercePlatform {
             : await qr.screenshot({ timeout: 5000, ...QR_OPTS }).catch(() => undefined);
         // ponytail: expiry from page text; payment result not polled yet.
         const expiry = (await valid.locator('xpath=..').innerText().catch(() => '')).replace(/\s+/g, ' ');
-        // Also write the QR to a file. Claude Desktop does render image blocks from
-        // tool results, but the inline image is downscaled to fit its box, and a phone
-        // camera pointed at a screen needs the full-resolution file.
+        // Also write the QR to a file, and put it on screen when the user has opted in.
+        // The inline image alone is not enough: clients render tool images in a short
+        // clipped box, so the code is not scannable from the chat no matter how good
+        // the capture is.
         const file = saveQrImage(image, total);
-        const how = file
-            ? 'Scan the QR above with any UPI app, or open the full-resolution copy at ' + file + '.'
-            : 'Scan the QR above with any UPI app.';
+        const opened = file && wantsQrViewer() ? openQrViewer(file) : false;
+        const how = opened
+            ? 'It is now open in an image viewer - scan it from there with any UPI app. ' +
+                '(This app clips images sent inline, which is why it is opened separately.)'
+            : file
+                ? 'Scan the QR above with any UPI app, or open the full-resolution copy at ' + file +
+                    '. To have it open automatically next time, call set_preferences(open_qr: "true").'
+                : 'Scan the QR above with any UPI app.';
         return {
             success: true,
             image,

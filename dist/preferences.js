@@ -10,6 +10,10 @@ export function loadPrefs() {
         return {};
     }
 }
+/** True when the user has opted into opening payment QRs in an image viewer. */
+export function wantsQrViewer() {
+    return loadPrefs().open_qr === 'true';
+}
 /** Merge `patch` into saved prefs; an empty string clears that key. */
 export function savePrefs(patch) {
     const next = { ...loadPrefs() };

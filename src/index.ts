@@ -324,7 +324,7 @@ const TOOLS: Tool[] = [
   },
   {
     name: 'set_preferences',
-    description: 'Save defaults used before ordering: phone (for login), pincode (6-digit delivery pincode - Blinkit asks for a location before login and cannot infer the right store from this machine\'s IP), upi_id (name@bank), payment_method (cod/upi/upi_qr/card). Ask for all of these once during onboarding, then pass an empty string to clear a value. Call with no arguments to just read the saved values.',
+    description: 'Save defaults used before ordering: phone (for login), pincode (6-digit delivery pincode - Blinkit asks for a location before login and cannot infer the right store from this machine\'s IP), upi_id (name@bank), payment_method (cod/upi/upi_qr/card), open_qr ("true" to open each payment QR in an image viewer - worth suggesting, because this app clips QR images sent inline and they will not scan from the chat). Ask for all of these once during onboarding, then pass an empty string to clear a value. Call with no arguments to just read the saved values.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -332,6 +332,7 @@ const TOOLS: Tool[] = [
         upi_id: { type: 'string' },
         payment_method: { type: 'string' },
         pincode: { type: 'string' },
+        open_qr: { type: 'string', description: '"true" opens each payment QR in an image viewer as soon as it is generated. Off by default.' },
       },
     },
   },
@@ -768,9 +769,9 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       }
 
       case 'set_preferences': {
-        const { phone, upi_id, payment_method, pincode } = args as any;
-        const p = savePrefs({ phone, upi_id, payment_method, pincode });
-        let out = `⚙️ Saved preferences: phone=${p.phone ?? '-'}, pincode=${p.pincode ?? '-'}, upi_id=${p.upi_id ?? '-'}, payment_method=${p.payment_method ?? '-'}`;
+        const { phone, upi_id, payment_method, pincode, open_qr } = args as any;
+        const p = savePrefs({ phone, upi_id, payment_method, pincode, open_qr });
+        let out = `⚙️ Saved preferences: phone=${p.phone ?? '-'}, pincode=${p.pincode ?? '-'}, upi_id=${p.upi_id ?? '-'}, payment_method=${p.payment_method ?? '-'}, open_qr=${p.open_qr ?? 'false'}`;
         // A pincode that isn't a pincode can't be typed into Blinkit's
         // location search, and it fails much later as a confusing "matched no
         // suggestion" - so reject it here.

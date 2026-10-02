@@ -49,6 +49,20 @@ export declare const QR_OPTS: {
 /** Where a payment QR is written for the user to open. Unique per attempt. */
 export declare function qrPath(total: number): string;
 /**
+ * Open a saved QR in the host's image viewer, so the user gets it full size.
+ *
+ * Claude Desktop (and other MCP clients) render tool-result images inside a short
+ * container with its own scrollbar, so a QR sent inline is clipped across the fold
+ * and will not scan. There is no protocol-level way to change that layout, so
+ * putting the real file on screen is the only route to a scannable code.
+ *
+ * Detached and unref'd, so the viewer outlives this call without holding the MCP
+ * server's event loop open. Never throws and never blocks: a failed launch is not
+ * worth failing an order over, and the path is still in the message either way.
+ * Returns true only if the process was spawned.
+ */
+export declare function openQrViewer(file: string): boolean;
+/**
  * Write a payment QR to disk so the user can open it.
  *
  * Not every MCP client renders image blocks from tool results - Claude Desktop

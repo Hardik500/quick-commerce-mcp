@@ -13,6 +13,7 @@
  *      The session is saved on SIGINT/SIGTERM before the process exits.
  */
 
+import { spawn } from 'child_process';
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
@@ -83,6 +84,45 @@ export const QR_OPTS = {
 export function qrPath(total: number): string {
   const stamp = new Date().toISOString().replace(/[:.]/g, '-');
   return path.join(SESSION_DIR, `payment-qr-${stamp}-${total}.png`);
+}
+
+/**
+ * Open a saved QR in the host's image viewer, so the user gets it full size.
+ *
+ * Claude Desktop (and other MCP clients) render tool-result images inside a short
+ * container with its own scrollbar, so a QR sent inline is clipped across the fold
+ * and will not scan. There is no protocol-level way to change that layout, so
+ * putting the real file on screen is the only route to a scannable code.
+ *
+ * Detached and unref'd, so the viewer outlives this call without holding the MCP
+ * server's event loop open. Never throws and never blocks: a failed launch is not
+ * worth failing an order over, and the path is still in the message either way.
+ * Returns true only if the process was spawned.
+ */
+export function openQrViewer(file: string): boolean {
+  try {
+    if (!file?.length || !fs.existsSync(file)) return false;
+    const [cmd, args] =
+      process.platform === 'win32'
+        ? // `start` treats its first quoted argument as a window title, so the
+          // empty "" is required - without it a quoted path is treated as the
+          // title and nothing opens.
+          ['cmd', ['/c', 'start', '', file]]
+        : process.platform === 'darwin'
+          ? ['open', [file]]
+          : ['xdg-open', [file]];
+    const child = spawn(cmd as string, args as string[], {
+      detached: true,
+      stdio: 'ignore',
+      // No shell: the path is passed as an argument, never interpolated into a
+      // command line, so a path with spaces or & cannot become a command.
+      shell: false,
+    });
+    child.unref();
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 /**

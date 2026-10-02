@@ -43,7 +43,7 @@ Claude Desktop, Cursor, Windsurf (add to the client's MCP config, then restart i
 
 | Tool | What it does |
 |------|--------------|
-| `set_preferences` | Save phone, pincode, UPI ID, default payment method (`cod`/`upi`/`upi_qr`/`card`). No args = read. Empty string = clear. Stored in `~/.quick-commerce-mcp/preferences.json` |
+| `set_preferences` | Save phone, pincode, UPI ID, default payment method (`cod`/`upi`/`upi_qr`/`card`), `open_qr` (`"true"` opens each payment QR in an image viewer). No args = read. Empty string = clear. Stored in `~/.quick-commerce-mcp/preferences.json` |
 | `check_login_status` | Is each platform logged in? |
 | `request_otp` | Enter the phone number on the platform and send the OTP SMS (phone defaults to the saved one) |
 | `submit_otp` | Complete login with the OTP you received |
@@ -102,6 +102,16 @@ See [AUTHENTICATION.md](AUTHENTICATION.md) for login troubleshooting - rejected 
 - **OTP required**: You always supply the OTP yourself
 - **Confirm before order**: Preview shown, you confirm final purchase
 - **Session isolation**: Each platform login is separate
+- **Payment QRs are never auto-opened unless you ask**: `set_preferences(open_qr: "true")` opts in to launching an image viewer when a QR is generated. It is off by default because it starts a process on your machine
+
+### Why a payment QR opens in a separate viewer
+
+MCP clients render tool-result images inside a short container with its own
+scrollbar — Claude Desktop's `Place order` block is one — so a QR sent inline is
+clipped across the fold and will not scan from the chat. The protocol has no way
+for a server to change that layout, so the full-resolution PNG is always written
+to `~/.quick-commerce-mcp/sessions/` and its path returned in the message. Set
+`open_qr` to `"true"` to have it also launch in your image viewer automatically.
 
 ## 🏗️ Architecture
 

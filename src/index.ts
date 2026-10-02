@@ -290,7 +290,7 @@ const TOOLS: Tool[] = [
   },
   {
     name: 'request_otp',
-    description: 'Start login: enter the phone number on the platform and trigger the OTP SMS. Then call submit_otp. Phone defaults to the saved one (set_preferences). To switch numbers, call logout first. Blinkit only for now; others use the quick-commerce-mcp-login CLI.',
+    description: 'Start login: enter the phone number on the platform and trigger the OTP SMS. Then call submit_otp. Phone defaults to the saved one (set_preferences). To switch numbers, call logout first. Supported on Blinkit, Zepto and Instamart.',
     inputSchema: {
       type: 'object',
       properties: {

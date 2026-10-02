@@ -133,6 +133,25 @@ export class SwiggyInstamartPlatform extends QuickCommercePlatform {
     }
   }
 
+  async sendOtp(phone: string): Promise<boolean> {
+    const page = this.page;
+    if (!page) throw new Error('Platform not initialized');
+    await page.goto(this.baseUrl, { waitUntil: 'domcontentloaded', timeout: 30000 });
+    await this.handleLocationPopup();
+    const tel = page.locator('[data-testid="input-field-tel-national"]');
+    if (!(await tel.count())) await page.locator('[data-testid="user-account-icon"]').click();
+    await tel.waitFor({ timeout: 15000 });
+    // fill() doesn't fire React's onChange here; type keystrokes and verify (early keystrokes get dropped before hydration).
+    for (let i = 0; i < 3; i++) {
+      await tel.click({ clickCount: 3 });
+      await page.keyboard.press('Backspace');
+      await page.keyboard.type(phone, { delay: 120 });
+      if ((await tel.inputValue()).replace(/\D/g, '') === phone) break;
+    }
+    await page.locator('button:has-text("CONTINUE")').first().click();
+    return page.locator(this.selectors.otpInput).first().waitFor({ timeout: 15000 }).then(() => true, () => false);
+  }
+
   async submitOtp(otp: string): Promise<boolean> {
     if (!this.page) throw new Error('Platform not initialized');
 

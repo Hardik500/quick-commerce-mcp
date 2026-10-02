@@ -161,6 +161,19 @@ export class ZeptoPlatform extends QuickCommercePlatform {
     }
   }
 
+  async sendOtp(phone: string): Promise<boolean> {
+    const page = this.page;
+    if (!page) throw new Error('Platform not initialized');
+    await page.goto(this.baseUrl, { waitUntil: 'domcontentloaded', timeout: 45000 });
+    const tel = page.locator('input[type="tel"][placeholder*="Phone" i]');
+    if (!(await tel.count())) await page.locator(this.selectors.loginButton).first().click();
+    await tel.waitFor({ timeout: 15000 });
+    await tel.click();
+    await tel.pressSequentially(phone, { delay: 80 });
+    await page.locator('button[type="submit"]:has-text("Continue")').click();
+    return page.locator(this.selectors.otpInput).first().waitFor({ timeout: 15000 }).then(() => true, () => false);
+  }
+
   async submitOtp(otp: string): Promise<boolean> {
     if (!this.page) throw new Error('Platform not initialized');
 

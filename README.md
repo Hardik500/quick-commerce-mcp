@@ -52,7 +52,9 @@ Claude Desktop, Cursor, Windsurf (add to the client's MCP config, then restart i
 | `diagnose_flow` | Inspect or repair a broken browser flow (e.g. after a site changes its markup) |
 | `list_addresses` / `select_address` | Pick the delivery address |
 
-Then shop: `search_products`, `compare_prices`, `resolve_items`, `add_to_cart`, `get_cart_summary`, `get_order_preview`, and finally `place_order` (preview first, then confirm with the token). `place_order` uses your saved UPI ID and payment method unless you override them.
+Then shop: `search_products`, `compare_prices`, `resolve_items`, `add_to_cart`, `remove_from_cart`, `get_cart_summary`, `clear_cart`, `get_order_preview`, and finally `place_order` (preview first, then confirm with the token). After ordering, `get_order_status` shows the latest order on Blinkit or Zepto.
+
+**Always pass `payment_method` explicitly to `place_order`.** Your saved default is a single value applied to every platform, and the same string means different things on different ones — `upi` is Blinkit-only, and Zepto needs `upi_qr` for a scannable QR. Relying on the default is the most common reason a payment method comes back unsupported.
 
 Alternative login from a terminal (opens a browser; log in, then Ctrl+C):
 
@@ -115,7 +117,8 @@ why that is worth turning on.
 
 ## 🔐 Security
 
-- **No card data stored**: CVV is read from env only; only phone/UPI ID preferences are saved locally
+- **No card data stored**: CVV is read from the `QC_CVV_<last4>` env var only, and is never written anywhere. What *is* written locally, all under `~/.quick-commerce-mcp/`: `preferences.json` (phone, pincode, UPI ID, default payment method, `open_qr`), session cookies in `sessions/`, repaired selectors in `flows/`, and payment QR images in `sessions/`
+- **A payment QR is saved to disk**: a UPI QR is a scannable payment instruction — it carries the payee VPA, the amount and a transaction reference. It is written to `sessions/` so you can open it full size, at mode `0600`. Deleting it after you pay is up to you
 - **OTP required**: You always supply the OTP yourself
 - **Confirm before order**: Preview shown, you confirm final purchase
 - **Session isolation**: Each platform login is separate

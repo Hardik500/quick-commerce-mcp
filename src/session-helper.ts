@@ -141,7 +141,11 @@ export function saveQrImage(image: Buffer | undefined, total: number): string | 
     // The extension has to agree with the content or tools that sniff the file
     // (and the user's file manager) show the QR as a broken image.
     const file = qrPath(total);
-    fs.writeFileSync(file, image);
+    // 0600, like preferences.json: a UPI QR is a scannable payment instruction
+    // carrying the payee VPA and the amount, so it should not be readable by
+    // other local accounts the way a default 0644 file would be. A no-op on
+    // Windows, which does not use POSIX modes.
+    fs.writeFileSync(file, image, { mode: 0o600 });
     return file;
   } catch {
     return undefined;

@@ -200,12 +200,17 @@ C:\Users\Hardik\Projects\quick-commerce-mcp\dist\index.js
 ## 🔒 Security Note
 
 The MCP server:
-- ✅ Never stores passwords or payment info
+- ✅ Never stores passwords, card numbers or CVV — the CVV is read from the
+  `QC_CVV_<last4>` env var at the moment of payment and never written down
 - ✅ Requires your OTP for login (sent to your phone)
 - ✅ Shows cart preview before any changes
 - ✅ Never auto-places orders without confirmation
 
-Your session cookies are stored locally in the MCP's data directory.
+Locally, under `~/.quick-commerce-mcp/`, it does keep: session cookies, your
+saved preferences (phone, pincode, UPI ID, default payment method), any selectors
+repaired at runtime, and **payment QR images** — a UPI QR is a scannable payment
+instruction carrying the payee VPA and amount, so treat `sessions/` as sensitive.
+It never asks for or stores a card number, PIN, or UPI PIN.
 
 ---
 

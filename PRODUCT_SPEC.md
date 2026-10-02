@@ -194,6 +194,9 @@ changes behaviour is `QC_CHROME_PATH`, which points at a Chrome binary when the
 
 ## 📊 Success Metrics
 
+Targets, not measurements — nothing here is instrumented, so treat them as goals
+rather than reported figures.
+
 | Metric | Target |
 |--------|--------|
 | Average time to find best price | < 30 seconds |
@@ -207,23 +210,27 @@ changes behaviour is `QC_CHROME_PATH`, which points at a Chrome binary when the
 
 | Risk | Mitigation |
 |------|------------|
-| Platform blocks automation | Rotate user agents, add delays, fallback to manual mode |
-| DOM changes break selectors | Modular selector configs, health checks |
-| OTP expiry | Auto-retry once, then prompt user |
-| Session timeout | Persistent cookies, auto-refresh |
-| Wrong item selection | Exact match priority + user confirmation |
+| Platform blocks automation | Drives installed Chrome with a mobile profile via `playwright-stealth`; no user-agent rotation and no proxy. If it still blocks, log in by hand with the interactive login CLI, which saves a session that later runs reuse |
+| DOM changes break selectors | Per-step selectors in `flows.ts`, plus `diagnose_flow` — it enumerates the live page and only adopts a selector after performing the step against it and confirming it worked. Repairs persist outside the repo, so an npm update does not undo them |
+| OTP expiry | Reports the platform's own rejection. Requesting a new OTP invalidates the previous one, which is the usual cause |
+| Session timeout | Sessions are `storageState()` snapshots; re-login when one expires, nothing to reinstall |
+| Wrong item selection | Exact match priority, `resolve_items` to inspect matches before adding, and user confirmation before ordering |
+| Payment confirmed but unread back | The server never claims a payment succeeded — it reports the platform's response and leaves payment confirmation to the user |
 
 ---
 
 ## 🔄 Development Phases
 
 ### Done
-- MCP server scaffold
-- Playwright base class
+- MCP server scaffold and tool layer
+- Installed-Chrome engine with stealth, permissions and geolocation
 - Zepto, Swiggy Instamart and Blinkit implementations
-- Price comparison logic
-- Error handling and documentation
+- Price comparison, item ranking and cart validation
+- OTP login on all three platforms, with saved sessions and an interactive fallback
+- Two-step ordering with a confirm token, across cod / upi_qr / upi / card
+- Runtime selector repair (`diagnose_flow`) so a site redesign doesn't need a release
+- Error handling, tests and documentation
 
----
-
-**Next Step**: Create project repo and start Phase 1? 🚀
+### Next
+- Instamart checkout preview and a live `place_order` on that platform
+- Reading payment outcome back from the platform instead of relying on the user

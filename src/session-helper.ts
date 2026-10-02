@@ -68,9 +68,10 @@ export const SCREENSHOT_OPTS = {
  * Screenshot options for the payment QR: lossless PNG, because a QR is made of
  * hard-edged modules and JPEG's ringing and chroma subsampling around those edges
  * is exactly what stops scanners reading it. Quality is not a trade worth making
- * here - at CSS scale a 230x230 crop is ~9 KB, so PNG costs nothing.
+ * here - a CSS-scale crop of this QR measures 230-295 px depending on the sheet
+ * and lands under 2 KB as PNG, so there is nothing to give up.
  *
- * `scale: 'css'` also keeps the capture at the QR's native 230x230 rather than
+ * `scale: 'css'` also keeps the capture at the QR's native size rather than
  * upscaling it 3x, which is the highest fidelity available from a screenshot.
  */
 export const QR_OPTS = {

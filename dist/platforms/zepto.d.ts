@@ -75,11 +75,14 @@ export declare class ZeptoPlatform extends QuickCommercePlatform {
      * The QR graphic on Zepto's payment sheet.
      *
      * Measured on the live sheet (2026-10-03): the QR is an inline
-     * `data:image/png;base64` <img> at 230x230. It is not a canvas and has no
+     * `data:image/png;base64` <img>. It is not a canvas and has no
      * distinguishing class, and the sheet carries other square images - UPI app
      * badges at ~86x96 and ~117x108 - which is why matching "a square graphic",
      * or matching whatever sits near the caption, grabs the wrong one. The inline
      * base64 payload is the only reliable discriminator.
+     *
+     * The QR's own size varies between orders (230x230 and 295x295 observed), so
+     * nothing here may assume a dimension - the payload is read, not measured.
      */
     private qrImage;
     /** UPI via QR: step 2 click creates a pending order and shows a QR (valid ~3.5 min) that the user scans. */

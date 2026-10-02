@@ -4,6 +4,7 @@
  */
 import { BrowserContext, Locator, Page } from 'playwright';
 import {
+  LoginStatus,
   QuickCommercePlatform,
   Product,
   SearchResult,
@@ -118,7 +119,7 @@ export class SwiggyInstamartPlatform extends QuickCommercePlatform {
     return present ? "Swiggy's \"Share location\" sheet is open" : null;
   }
 
-  async checkLogin(): Promise<{ loggedIn: boolean; otpSent?: boolean; phone?: string }> {
+  async checkLogin(): Promise<LoginStatus> {
     if (!this.page) throw new Error('Platform not initialized');
 
     try {
@@ -129,20 +130,30 @@ export class SwiggyInstamartPlatform extends QuickCommercePlatform {
 
       if (authCookie && authCookie.value) {
         this.isLoggedIn = true;
+        this.sessionVerified = true;
         return { loggedIn: true };
       }
 
       const otpInput = await this.page.$(this.selectors.otpInput);
       if (otpInput) {
         this.isLoggedIn = false;
+        this.sessionVerified = true;
         return { loggedIn: false, otpSent: true };
       }
 
       this.isLoggedIn = false;
+      this.sessionVerified = true;
       return { loggedIn: false };
     } catch (error) {
+      // A failed check is not a logged-out account - see the note in base.ts.
       console.error('Error checking login status:', error);
-      return { loggedIn: false };
+      this.isLoggedIn = false;
+      this.sessionVerified = false;
+      return {
+        loggedIn: false,
+        indeterminate: true,
+        reason: `the check itself failed (${(error as Error)?.message?.split('\n')[0] ?? 'unknown error'})`,
+      };
     }
   }
 
@@ -249,9 +260,9 @@ export class SwiggyInstamartPlatform extends QuickCommercePlatform {
 
   async search(query: string): Promise<SearchResult> {
     if (!this.page) throw new Error('Platform not initialized');
-    if (!this.isLoggedIn) {
-      throw new Error('Not logged in. Please login first.');
-    }
+    // Verifies the session itself if nobody has yet, rather than trusting a flag
+    // this method never set - see ensureSession in base.ts.
+    await this.ensureSession();
 
     try {
       // Delivery location comes from the saved session; `location` is

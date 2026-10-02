@@ -58,6 +58,16 @@ permission alone doesn't clear the modal. Normally you don't need it.
 Usually a slow first paint or a bot check on a cold start. Retrying once usually works.
 If it keeps failing, use the interactive login below.
 
+### "could not confirm the session"
+
+This is deliberately **not** reported as "Not logged in". A bot-check page, a
+timeout, or a page that failed to evaluate says nothing about whether you have a
+session - so the server tells you to retry rather than sending you into an OTP
+round trip that would not fix it.
+
+If it persists across several retries, the session has probably genuinely expired.
+Then `logout` and `request_otp` will do the job.
+
 ### The assistant keeps guessing, or a flow breaks
 
 Ask your assistant to call `diagnose_flow`. It shows what the page actually looks like,

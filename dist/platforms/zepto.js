@@ -138,12 +138,19 @@ export class ZeptoPlatform extends QuickCommercePlatform {
             // performed too early would falsely report "logged in".
             await this.page.waitForLoadState('networkidle', { timeout: 10000 }).catch(() => { });
             // CloudFront/WAF block pages have no login UI either - detect them
-            // explicitly so they aren't mistaken for a logged-in state.
+            // explicitly so they aren't mistaken for a logged-in state, and so they
+            // aren't mistaken for a logged-*out* state either. A block says nothing
+            // about the session, so it is reported as indeterminate and the caller is
+            // told to retry rather than to log in again.
             const blockedEl = await this.page.$(this.selectors.blockedPage);
             if (blockedEl) {
                 console.error('❌ Zepto blocked the request (bot detection) - cannot determine login state');
                 this.isLoggedIn = false;
-                return { loggedIn: false };
+                return {
+                    loggedIn: false,
+                    indeterminate: true,
+                    reason: 'Zepto served a bot-detection page (CloudFront/WAF)',
+                };
             }
             // Absence of the login button is not evidence of a session: on an
             // anonymous load Zepto hides it behind the profile/location sheet, and a
@@ -163,20 +170,32 @@ export class ZeptoPlatform extends QuickCommercePlatform {
             const cookies = await this.context.cookies();
             if (cookies.some(c => c.name === 'user_id' && c.value)) {
                 this.isLoggedIn = true;
+                this.sessionVerified = true;
                 return { loggedIn: true };
             }
             const storage = await this.context.storageState();
             const authed = (storage.origins ?? []).some(origin => (origin.localStorage ?? []).some(entry => /^(user_?id|x-user-id|auth_token|access_token)$/i.test(entry.name) && (entry.value ?? '').length > 4));
             if (authed) {
                 this.isLoggedIn = true;
+                this.sessionVerified = true;
                 return { loggedIn: true };
             }
             this.isLoggedIn = false;
+            this.sessionVerified = true;
             return { loggedIn: false };
         }
         catch (error) {
+            // A timeout or a page that would not evaluate is not evidence of a missing
+            // session. Saying "loggedIn: false" here is what used to send users off to
+            // re-login over a transient blip, so this stays unverified and says why.
             console.error('Error checking login status:', error);
-            return { loggedIn: false };
+            this.isLoggedIn = false;
+            this.sessionVerified = false;
+            return {
+                loggedIn: false,
+                indeterminate: true,
+                reason: `the check itself failed (${error?.message?.split('\n')[0] ?? 'unknown error'})`,
+            };
         }
     }
     async sendOtp(phone) {
@@ -321,9 +340,9 @@ export class ZeptoPlatform extends QuickCommercePlatform {
     async search(query) {
         if (!this.page)
             throw new Error('Platform not initialized');
-        if (!this.isLoggedIn) {
-            throw new Error('Not logged in. Please login first.');
-        }
+        // Verifies the session itself if nobody has yet, rather than trusting a flag
+        // this method never set - see ensureSession in base.ts.
+        await this.ensureSession();
         try {
             // Typing into the bare /search page can leave its "trending" cards on
             // screen; the query URL renders only the real results.

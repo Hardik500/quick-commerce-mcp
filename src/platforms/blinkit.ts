@@ -4,6 +4,7 @@
  */
 import { BrowserContext, Locator, Page } from 'playwright';
 import {
+  LoginStatus,
   QuickCommercePlatform,
   Product,
   SearchResult,
@@ -190,7 +191,7 @@ export class BlinkitPlatform extends QuickCommercePlatform {
     return dismissed ? null : `Blinkit location modal stayed open after selecting "${needle}"`;
   }
 
-  async checkLogin(): Promise<{ loggedIn: boolean; otpSent?: boolean; phone?: string }> {
+  async checkLogin(): Promise<LoginStatus> {
     if (!this.page) throw new Error('Platform not initialized');
 
     try {
@@ -201,6 +202,7 @@ export class BlinkitPlatform extends QuickCommercePlatform {
 
       if (authCookie && authCookie.value) {
         this.isLoggedIn = true;
+        this.sessionVerified = true;
         return { loggedIn: true };
       }
 
@@ -210,14 +212,23 @@ export class BlinkitPlatform extends QuickCommercePlatform {
       const otpInput = await this.page.$(this.selectors.otpInput);
       if (otpInput) {
         this.isLoggedIn = false;
+        this.sessionVerified = true;
         return { loggedIn: false, otpSent: true, phone: this.otpPhone };
       }
 
       this.isLoggedIn = false;
+      this.sessionVerified = true;
       return { loggedIn: false };
     } catch (error) {
+      // A failed check is not a logged-out account - see the note in base.ts.
       console.error('Error checking login status:', error);
-      return { loggedIn: false };
+      this.isLoggedIn = false;
+      this.sessionVerified = false;
+      return {
+        loggedIn: false,
+        indeterminate: true,
+        reason: `the check itself failed (${(error as Error)?.message?.split('\n')[0] ?? 'unknown error'})`,
+      };
     }
   }
 
@@ -303,9 +314,9 @@ export class BlinkitPlatform extends QuickCommercePlatform {
 
   async search(query: string): Promise<SearchResult> {
     if (!this.page) throw new Error('Platform not initialized');
-    if (!this.isLoggedIn) {
-      throw new Error('Not logged in. Please login first.');
-    }
+    // Verifies the session itself if nobody has yet, rather than trusting a flag
+    // this method never set - see ensureSession in base.ts.
+    await this.ensureSession();
 
     try {
       // Delivery location is the account's live address (change it with

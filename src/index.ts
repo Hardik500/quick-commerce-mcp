@@ -50,6 +50,11 @@ async function searchOn(platformName: string, query: string): Promise<SearchResu
   try {
     const platform = await getPlatform(platformName);
     const login = await platform.checkLogin();
+    if (login.indeterminate) {
+      // Not "Not logged in" - see check_login_status. A block or timeout here
+      // would otherwise be reported per-platform as if the session had gone.
+      return { platform: platformName, error: `Could not confirm session: ${login.reason ?? 'page did not load'} - retry shortly` };
+    }
     if (!login.loggedIn) return { platform: platformName, error: 'Not logged in' };
     return await platform.search(query);
   } catch (error: any) {
@@ -558,6 +563,13 @@ async function handle(name: string, args: any): Promise<any> {
             responseText += `✅ ${status.platform}: Logged in\n`;
           } else if (status.otpSent) {
             responseText += `⏳ ${status.platform}: OTP sent${status.phone ? ` to ${status.phone}` : ''}\n`;
+          } else if ('indeterminate' in status && status.indeterminate) {
+            // Deliberately not "Not logged in": a block page or a timeout says
+            // nothing about the session, and telling the user to log in again
+            // sends them into an OTP round trip that cannot fix either cause.
+            responseText +=
+              `⚠️ ${status.platform}: could not confirm the session - ${status.reason ?? 'page did not load as expected'}. ` +
+              `Usually a bot check or a slow page. Retry in a few seconds before assuming they are logged out.\n`;
           } else {
             responseText += `❌ ${status.platform}: Not logged in\n`;
           }
@@ -862,6 +874,12 @@ async function handle(name: string, args: any): Promise<any> {
         const say = (text: string) => ({ content: [{ type: 'text', text }] });
         const platform = await getPlatform(platformName);
         const login = await platform.checkLogin();
+        if (login.indeterminate) {
+          return say(
+            `⚠️ Could not confirm the ${platformName} session: ${login.reason ?? 'the page did not load as expected'}. ` +
+              `Usually a bot check or a slow page, not a logged-out account - retry in a few seconds before asking the user to log in again.`,
+          );
+        }
         if (!login.loggedIn) return say(`❌ Not logged in on ${platformName}.`);
         let text = `🔎 **Item resolution - ${platformName.toUpperCase()}** (nothing added to cart)\n`;
         for (const q of queries as string[]) {

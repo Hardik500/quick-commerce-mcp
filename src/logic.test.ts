@@ -241,6 +241,56 @@ test("keyedLock: duplicate keys in one call are held once", async () => {
   assert.equal(peak, 1);
 });
 
+test("ensureSession: verifies lazily instead of trusting an unset flag", async () => {
+  // The Instamart add_to_cart bug, at the unit level: a fresh instance whose
+  // flag was never set, on a platform that *is* logged in. A guard reading
+  // isLoggedIn directly throws "Not logged in" here; ensureSession must not.
+  let checks = 0;
+  const p: any = new BlinkitPlatform();
+  p.checkLogin = async () => { checks++; return { loggedIn: true }; };
+
+  assert.equal(p.isLoggedIn, false, "precondition: flag starts unset");
+  await p.ensureSession();
+  assert.equal(checks, 1);
+});
+
+test("ensureSession: a verified session is not re-checked on every call", async () => {
+  let checks = 0;
+  const p: any = new BlinkitPlatform();
+  p.checkLogin = async () => { checks++; return { loggedIn: true }; };
+
+  await p.ensureSession();
+  await p.ensureSession();
+  await p.ensureSession();
+  assert.equal(checks, 1, "one cookie read per instance, not one per guarded call");
+});
+
+test("ensureSession: a genuinely logged-out session still says so", async () => {
+  const p: any = new BlinkitPlatform();
+  p.checkLogin = async () => ({ loggedIn: false });
+  await assert.rejects(() => p.ensureSession(), /^Error: Not logged in\./);
+});
+
+test("ensureSession: indeterminate asks for a retry, not a re-login", async () => {
+  const p: any = new BlinkitPlatform();
+  p.checkLogin = async () => ({ loggedIn: false, indeterminate: true, reason: 'bot-detection page' });
+  // The distinction that matters: this must NOT read as "Not logged in", or the
+  // user is sent into a pointless OTP round trip they cannot fix.
+  await assert.rejects(() => p.ensureSession(), /could not confirm/i);
+  await assert.rejects(() => p.ensureSession(), /retry/i);
+  await assert.rejects(() => p.ensureSession(), (e: Error) => !/Not logged in/.test(e.message));
+});
+
+test("ensureSession: a transient failure is not remembered", async () => {
+  let n = 0;
+  const p: any = new BlinkitPlatform();
+  p.checkLogin = async () => (++n === 1 ? { loggedIn: false, indeterminate: true, reason: 'timeout' } : { loggedIn: true });
+
+  await assert.rejects(() => p.ensureSession(), /timeout/);
+  await p.ensureSession(); // must succeed on the retry, not replay the failure
+  assert.equal(n, 2);
+});
+
 test("storeNotice: detects closed/unserviceable banners, ignores normal carts", () => {
   assert.match(storeNotice("To Pay\nThis Instamart store is currently unserviceable\nRetry")!, /unserviceable/);
   assert.match(storeNotice("Sorry, store closed for the night")!, /closed/);

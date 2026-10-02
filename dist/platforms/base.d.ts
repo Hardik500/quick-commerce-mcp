@@ -57,12 +57,44 @@ export interface OrderPreview {
     /** Payment options visible on the platform's payment screen. */
     paymentMethods: string[];
 }
+/**
+ * What a login check concluded.
+ *
+ * `indeterminate` exists because "not logged in" and "could not find out" lead
+ * to opposite advice. Collapsing them sends the user off to re-login when their
+ * session is perfectly valid, which is worse than saying nothing: a re-login
+ * costs an OTP round trip and, on a bot-blocked page, cannot succeed anyway.
+ */
+export interface LoginStatus {
+    loggedIn: boolean;
+    otpSent?: boolean;
+    phone?: string;
+    /** A block page, a timeout or any other error meant this is not a real "no". */
+    indeterminate?: boolean;
+    /** Human-readable cause, shown when `indeterminate` is set. */
+    reason?: string;
+}
 export declare abstract class QuickCommercePlatform {
     protected name: string;
     protected baseUrl: string;
     protected context: BrowserContext | null;
     protected page: Page | null;
     protected isLoggedIn: boolean;
+    /**
+     * Whether `isLoggedIn` reflects a check this instance actually performed.
+     *
+     * Without it, `isLoggedIn` is only true if some earlier caller happened to
+     * remember to call `checkLogin()`, so any new code path that reaches a guarded
+     * method without doing so fails on a valid session. That already cost one bug:
+     * `add_to_cart` on Instamart skipped the check, the internal `search()` threw
+     * "Not logged in", and a `.catch(() => null)` turned it into "Product not
+     * found". Tracked separately so `ensureSession` can verify lazily instead.
+     *
+     * `ensureSession` maintains this itself rather than trusting each `checkLogin`
+     * to - otherwise the next platform added would have to remember, which is the
+     * same trap in a new place.
+     */
+    protected sessionVerified: boolean;
     constructor(name: string, baseUrl: string);
     /**
      * Initialize browser context
@@ -72,11 +104,19 @@ export declare abstract class QuickCommercePlatform {
      * Check if user is logged in, prompt for OTP if needed
      * Returns: true if logged in, false if OTP needed
      */
-    abstract checkLogin(): Promise<{
-        loggedIn: boolean;
-        otpSent?: boolean;
-        phone?: string;
-    }>;
+    abstract checkLogin(): Promise<LoginStatus>;
+    /**
+     * Confirm there is a usable session, checking lazily if nobody has yet.
+     *
+     * Call this instead of reading `isLoggedIn` directly. It removes the trap where
+     * a method throws "Not logged in" on a perfectly good session simply because
+     * the caller was the first to touch the platform this instance.
+     *
+     * The check runs at most once per successful verification, so a normal tool
+     * call still costs one cookie read, not one per guarded method. A failed check
+     * is not remembered, so a transient failure does not poison the instance.
+     */
+    protected ensureSession(): Promise<void>;
     /** Enter the phone number and request an OTP. Override per platform. */
     sendOtp(_phone: string): Promise<boolean>;
     /**

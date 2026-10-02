@@ -3,7 +3,7 @@
  * URL: https://blinkit.com
  */
 import { BrowserContext, Locator } from 'playwright';
-import { QuickCommercePlatform, SearchResult, CartSummary, OrderPreview } from './base.js';
+import { LoginStatus, QuickCommercePlatform, SearchResult, CartSummary, OrderPreview } from './base.js';
 /** Bill rows look like "Items total Saved ₹2 ₹195 ₹193" or "Handling charge ₹12": last ₹ amount is what's charged. */
 export declare function parseBill(rows: string[]): {
     subtotal: number;
@@ -37,11 +37,7 @@ export declare class BlinkitPlatform extends QuickCommercePlatform {
      * blocked on a position it cannot determine.
      */
     private clearLocationModalBySearch;
-    checkLogin(): Promise<{
-        loggedIn: boolean;
-        otpSent?: boolean;
-        phone?: string;
-    }>;
+    checkLogin(): Promise<LoginStatus>;
     /** Remembered so checkLogin can name the number the OTP went to. */
     private otpPhone?;
     sendOtp(phone: string): Promise<boolean>;

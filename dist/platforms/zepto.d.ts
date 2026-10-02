@@ -9,7 +9,7 @@
  * Run: npx tsx src/session-helper.ts login zepto
  */
 import { BrowserContext, Locator } from 'playwright';
-import { QuickCommercePlatform, SearchResult, CartSummary, OrderPreview } from './base.js';
+import { LoginStatus, QuickCommercePlatform, SearchResult, CartSummary, OrderPreview } from './base.js';
 /** Zepto bill rows: "Item Total ₹125 ₹123", "Delivery Fee ₹30", "Handling Fee ₹10 FREE" (waived = 0). */
 export declare function parseZeptoBill(rows: string[]): {
     subtotal: number;
@@ -38,11 +38,7 @@ export declare class ZeptoPlatform extends QuickCommercePlatform {
     initialize(context: BrowserContext): Promise<void>;
     /** Persist cookies + localStorage so the next run starts already logged in. */
     saveSession(): Promise<void>;
-    checkLogin(): Promise<{
-        loggedIn: boolean;
-        otpSent?: boolean;
-        phone?: string;
-    }>;
+    checkLogin(): Promise<LoginStatus>;
     sendOtp(phone: string): Promise<boolean>;
     /**
      * Open the login panel so its fields are inspectable. Without this a

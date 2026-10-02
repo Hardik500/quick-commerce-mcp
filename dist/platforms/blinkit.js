@@ -177,6 +177,7 @@ export class BlinkitPlatform extends QuickCommercePlatform {
             const authCookie = cookies.find(c => c.name === 'gr_1_accessToken');
             if (authCookie && authCookie.value) {
                 this.isLoggedIn = true;
+                this.sessionVerified = true;
                 return { loggedIn: true };
             }
             // If a login flow was already triggered (e.g. by a prior submitOtp
@@ -185,14 +186,23 @@ export class BlinkitPlatform extends QuickCommercePlatform {
             const otpInput = await this.page.$(this.selectors.otpInput);
             if (otpInput) {
                 this.isLoggedIn = false;
+                this.sessionVerified = true;
                 return { loggedIn: false, otpSent: true, phone: this.otpPhone };
             }
             this.isLoggedIn = false;
+            this.sessionVerified = true;
             return { loggedIn: false };
         }
         catch (error) {
+            // A failed check is not a logged-out account - see the note in base.ts.
             console.error('Error checking login status:', error);
-            return { loggedIn: false };
+            this.isLoggedIn = false;
+            this.sessionVerified = false;
+            return {
+                loggedIn: false,
+                indeterminate: true,
+                reason: `the check itself failed (${error?.message?.split('\n')[0] ?? 'unknown error'})`,
+            };
         }
     }
     /** Remembered so checkLogin can name the number the OTP went to. */
@@ -272,9 +282,9 @@ export class BlinkitPlatform extends QuickCommercePlatform {
     async search(query) {
         if (!this.page)
             throw new Error('Platform not initialized');
-        if (!this.isLoggedIn) {
-            throw new Error('Not logged in. Please login first.');
-        }
+        // Verifies the session itself if nobody has yet, rather than trusting a flag
+        // this method never set - see ensureSession in base.ts.
+        await this.ensureSession();
         try {
             // Delivery location is the account's live address (change it with
             // select_address); the /s/?q= page doesn't take a location override.

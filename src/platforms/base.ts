@@ -61,12 +61,45 @@ export interface OrderPreview {
   paymentMethods: string[];
 }
 
+/**
+ * What a login check concluded.
+ *
+ * `indeterminate` exists because "not logged in" and "could not find out" lead
+ * to opposite advice. Collapsing them sends the user off to re-login when their
+ * session is perfectly valid, which is worse than saying nothing: a re-login
+ * costs an OTP round trip and, on a bot-blocked page, cannot succeed anyway.
+ */
+export interface LoginStatus {
+  loggedIn: boolean;
+  otpSent?: boolean;
+  phone?: string;
+  /** A block page, a timeout or any other error meant this is not a real "no". */
+  indeterminate?: boolean;
+  /** Human-readable cause, shown when `indeterminate` is set. */
+  reason?: string;
+}
+
 export abstract class QuickCommercePlatform {
   protected name: string;
   protected baseUrl: string;
   protected context: BrowserContext | null = null;
   protected page: Page | null = null;
   protected isLoggedIn: boolean = false;
+  /**
+   * Whether `isLoggedIn` reflects a check this instance actually performed.
+   *
+   * Without it, `isLoggedIn` is only true if some earlier caller happened to
+   * remember to call `checkLogin()`, so any new code path that reaches a guarded
+   * method without doing so fails on a valid session. That already cost one bug:
+   * `add_to_cart` on Instamart skipped the check, the internal `search()` threw
+   * "Not logged in", and a `.catch(() => null)` turned it into "Product not
+   * found". Tracked separately so `ensureSession` can verify lazily instead.
+   *
+   * `ensureSession` maintains this itself rather than trusting each `checkLogin`
+   * to - otherwise the next platform added would have to remember, which is the
+   * same trap in a new place.
+   */
+  protected sessionVerified: boolean = false;
 
   constructor(name: string, baseUrl: string) {
     this.name = name;
@@ -82,7 +115,38 @@ export abstract class QuickCommercePlatform {
    * Check if user is logged in, prompt for OTP if needed
    * Returns: true if logged in, false if OTP needed
    */
-  abstract checkLogin(): Promise<{ loggedIn: boolean; otpSent?: boolean; phone?: string }>;
+  abstract checkLogin(): Promise<LoginStatus>;
+
+  /**
+   * Confirm there is a usable session, checking lazily if nobody has yet.
+   *
+   * Call this instead of reading `isLoggedIn` directly. It removes the trap where
+   * a method throws "Not logged in" on a perfectly good session simply because
+   * the caller was the first to touch the platform this instance.
+   *
+   * The check runs at most once per successful verification, so a normal tool
+   * call still costs one cookie read, not one per guarded method. A failed check
+   * is not remembered, so a transient failure does not poison the instance.
+   */
+  protected async ensureSession(): Promise<void> {
+    if (this.sessionVerified && this.isLoggedIn) return;
+    const status = await this.checkLogin();
+    if (status.loggedIn) {
+      this.isLoggedIn = true;
+      this.sessionVerified = true;
+      return;
+    }
+    // Only a definite "no" counts as verified. Anything else leaves the instance
+    // unverified so the next call tries again instead of replaying this result.
+    this.sessionVerified = false;
+    if (status.indeterminate) {
+      throw new Error(
+        `Could not confirm the ${this.name} session: ${status.reason ?? 'the page did not load as expected'}. ` +
+          `This is usually a bot check or a slow page, not a logged-out account - retry in a few seconds before asking the user to log in again.`,
+      );
+    }
+    throw new Error('Not logged in. Please login first.');
+  }
 
   /** Enter the phone number and request an OTP. Override per platform. */
   async sendOtp(_phone: string): Promise<boolean> {

@@ -3,7 +3,7 @@
  * URL: https://www.swiggy.com/instamart
  */
 import { BrowserContext, Locator } from 'playwright';
-import { QuickCommercePlatform, SearchResult, CartSummary, OrderPreview } from './base.js';
+import { LoginStatus, QuickCommercePlatform, SearchResult, CartSummary, OrderPreview } from './base.js';
 /**
  * Instamart bill is one text line per cell: label, then "struck original, actual" or a single amount or "FREE"
  * (e.g. "Handling Fee","₹12.83","₹12.00" / "Delivery Partner Fee","₹30.00","FREE"). Last amount is what's charged.
@@ -37,11 +37,7 @@ export declare class SwiggyInstamartPlatform extends QuickCommercePlatform {
      * Returns a note about the sheet's presence, or null when there is none.
      */
     private handleLocationPopup;
-    checkLogin(): Promise<{
-        loggedIn: boolean;
-        otpSent?: boolean;
-        phone?: string;
-    }>;
+    checkLogin(): Promise<LoginStatus>;
     sendOtp(phone: string): Promise<boolean>;
     submitOtp(otp: string): Promise<boolean>;
     /** Persist cookies + localStorage so the next run starts already logged in. */

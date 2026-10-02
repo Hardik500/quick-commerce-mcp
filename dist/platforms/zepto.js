@@ -1,5 +1,5 @@
 import { QuickCommercePlatform, } from './base.js';
-import { sessionPath, ensureSessionDir, saveQrImage } from '../session-helper.js';
+import { sessionPath, ensureSessionDir, saveQrImage, SCREENSHOT_OPTS } from '../session-helper.js';
 import { storeNotice } from '../ranking.js';
 import { selectorFor } from '../flows.js';
 /** Zepto bill rows: "Item Total ₹125 ₹123", "Delivery Fee ₹30", "Handling Fee ₹10 FREE" (waived = 0). */
@@ -719,7 +719,9 @@ export class ZeptoPlatform extends QuickCommercePlatform {
         await valid.waitFor({ timeout: 15000 });
         const card = page.getByText(/Scan and pay using any UPI app/i).first()
             .locator('xpath=ancestor::div[.//canvas or .//img or .//svg][1]');
-        const image = await card.screenshot({ timeout: 5000 }).catch(() => page.screenshot());
+        const image = await card
+            .screenshot({ timeout: 5000, ...SCREENSHOT_OPTS })
+            .catch(() => page.screenshot(SCREENSHOT_OPTS));
         // ponytail: expiry from page text; payment result not polled yet.
         const expiry = (await valid.locator('xpath=..').innerText().catch(() => '')).replace(/\s+/g, ' ');
         // Some MCP clients (Claude Desktop included) silently drop image blocks from

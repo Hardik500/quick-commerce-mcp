@@ -763,8 +763,13 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
                 }
                 const r = await platform.placeOrder(payment_method, true);
                 const out = [{ type: 'text', text: `${r.success ? '✅' : '❌'} ${r.message}` }];
-                if (r.image)
-                    out.push({ type: 'image', data: r.image.toString('base64'), mimeType: 'image/png' });
+                // Clients cap tool results at ~1MB and drop anything larger without
+                // saying so, so images are captured at CSS scale as JPEG (see
+                // SCREENSHOT_OPTS). The mime type has to follow the buffer.
+                if (r.image) {
+                    const isJpeg = r.image[0] === 0xff && r.image[1] === 0xd8;
+                    out.push({ type: 'image', data: r.image.toString('base64'), mimeType: isJpeg ? 'image/jpeg' : 'image/png' });
+                }
                 return { content: out };
             }
             case 'resolve_items': {

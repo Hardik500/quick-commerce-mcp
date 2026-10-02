@@ -39,6 +39,26 @@ export function sessionPath(platform) {
     return path.join(SESSION_DIR, `${canonicalPlatform(platform)}-session.json`);
 }
 /** Where a payment QR is written for the user to open. Unique per attempt. */
+/**
+ * Screenshot options that keep a payload inside the ~1 MB cap clients impose on
+ * tool results (Claude Desktop drops anything larger without saying so).
+ *
+ * The context runs at deviceScaleFactor 3, so a default PNG screenshot captures
+ * 9x the pixels. Measured on this checkout UI: a full page was 628 KB base64 as
+ * a 3x PNG - under the cap but close enough that the denser payment page crosses
+ * it. `scale: 'css'` removes the 3x multiplier, which is what actually frees the
+ * space.
+ *
+ * Quality stays high (q95) because the QR is the whole point and has to remain
+ * scannable; at CSS scale it is ~44 KB, so there is no reason to compress it
+ * further. Only the full-page fallback is large enough to matter, and it lands
+ * near 100 KB at this setting.
+ */
+export const SCREENSHOT_OPTS = {
+    type: 'jpeg',
+    quality: 95,
+    scale: 'css',
+};
 export function qrPath(total) {
     const stamp = new Date().toISOString().replace(/[:.]/g, '-');
     return path.join(SESSION_DIR, `payment-qr-${stamp}-${total}.png`);
@@ -56,7 +76,7 @@ export function saveQrImage(image, total) {
         return undefined;
     try {
         ensureSessionDir();
-        const file = qrPath(total);
+        const file = qrPath(total).replace(/\.png$/, '.jpg');
         fs.writeFileSync(file, image);
         return file;
     }

@@ -663,13 +663,37 @@ export class ZeptoPlatform extends QuickCommercePlatform {
   async getLatestOrder(): Promise<string | null> {
     const page = this.page;
     if (!page) throw new Error('Platform not initialized');
-    const seen = page.getByText(/₹\d+/).first();
-    // First cold load of /account/orders often renders blank; retry with a fresh navigation.
-    for (let i = 0; i < 2; i++) {
-      await page.goto(`${this.baseUrl}/account/orders`, { waitUntil: 'domcontentloaded', timeout: 45000 }).catch(() => {});
-      if (await seen.waitFor({ timeout: 15000 }).then(() => true, () => false)) {
+
+    // A rendered order card, not just any rupee amount - the homepage is full of
+    // prices, so waiting on /₹\d+/ reported success while sitting on the home page.
+    const list = page.getByText(/Order Again/i).first();
+    const read = async () => {
+      if (await list.count().catch(() => 0)) {
         return (await page.locator('body').innerText()).replace(/\s+/g, ' ').slice(0, 600);
       }
+      return null;
+    };
+
+    for (let attempt = 0; attempt < 2; attempt++) {
+      // Fast path: the deep link.
+      await page.goto(`${this.baseUrl}/account/orders`, { waitUntil: 'domcontentloaded', timeout: 45000 }).catch(() => {});
+      await list.waitFor({ timeout: 10000 }).catch(() => {});
+      const direct = await read();
+      if (direct) return direct;
+
+      // Zepto often bounces that deep link back to "/", which is why this used to
+      // return null intermittently rather than consistently. Walk the same path a
+      // person does: home -> profile -> Orders.
+      await page.goto(`${this.baseUrl}/`, { waitUntil: 'domcontentloaded', timeout: 45000 }).catch(() => {});
+      await page.locator('[aria-label="profile"], [data-testid="profile"]').first()
+        .click({ timeout: 10000 })
+        .catch(() => {});
+      await page.getByText(/^orders$/i).first()
+        .click({ timeout: 10000 })
+        .catch(() => {});
+      await list.waitFor({ timeout: 12000 }).catch(() => {});
+      const viaUi = await read();
+      if (viaUi) return viaUi;
     }
     return null;
   }

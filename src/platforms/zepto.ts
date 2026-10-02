@@ -18,7 +18,7 @@ import {
   CartItem,
   Address,
 } from './base.js';
-import { sessionPath, ensureSessionDir } from '../session-helper.js';
+import { sessionPath, ensureSessionDir, saveQrImage } from '../session-helper.js';
 import { storeNotice } from '../ranking.js';
 import { selectorFor } from '../flows.js';
 
@@ -778,8 +778,22 @@ export class ZeptoPlatform extends QuickCommercePlatform {
     const card = page.getByText(/Scan and pay using any UPI app/i).first()
       .locator('xpath=ancestor::div[.//canvas or .//img or .//svg][1]');
     const image = await card.screenshot({ timeout: 5000 }).catch(() => page.screenshot());
-    // ponytail: expiry from page text; payment result not polled yet (success detection comes later).
+    // ponytail: expiry from page text; payment result not polled yet.
     const expiry = (await valid.locator('xpath=..').innerText().catch(() => '')).replace(/\s+/g, ' ');
-    return { success: true, image, message: `QR shown for ₹${total}. ${expiry}. Ask the user to scan it with any UPI app; an unpaid order stays pending until it expires.` };
+
+    // Some MCP clients (Claude Desktop included) silently drop image blocks from
+    // tool results, so also write the QR to a file the user can open. The image
+    // block is still returned for clients that do render it.
+    const file = saveQrImage(image, total);
+    const how = file
+      ? 'The QR was saved to: ' + file + ' - open that file and scan it with any UPI app, because this chat may not render the QR inline.'
+      : 'Ask the user to scan it with any UPI app.';
+
+    return {
+      success: true,
+      image,
+      message: 'QR shown for Rs ' + total + '. ' + expiry + ' ' + how +
+        ' An unpaid order stays pending until the QR expires.',
+    };
   }
 }

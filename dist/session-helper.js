@@ -38,6 +38,32 @@ export function ensureSessionDir() {
 export function sessionPath(platform) {
     return path.join(SESSION_DIR, `${canonicalPlatform(platform)}-session.json`);
 }
+/** Where a payment QR is written for the user to open. Unique per attempt. */
+export function qrPath(total) {
+    const stamp = new Date().toISOString().replace(/[:.]/g, '-');
+    return path.join(SESSION_DIR, `payment-qr-${stamp}-${total}.png`);
+}
+/**
+ * Write a payment QR to disk so the user can open it.
+ *
+ * Not every MCP client renders image blocks from tool results - Claude Desktop
+ * drops them silently - and a QR the user cannot see is a QR they cannot pay
+ * with. Returns the path, or undefined if it could not be written; the caller
+ * still returns the image block for clients that do render it.
+ */
+export function saveQrImage(image, total) {
+    if (!image?.length)
+        return undefined;
+    try {
+        ensureSessionDir();
+        const file = qrPath(total);
+        fs.writeFileSync(file, image);
+        return file;
+    }
+    catch {
+        return undefined;
+    }
+}
 /**
  * Interactive login helper - opens a browser for manual login.
  * Saves the session (storageState) when the user presses Ctrl+C.

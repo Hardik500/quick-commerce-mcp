@@ -202,12 +202,15 @@ const TOOLS: Tool[] = [
   },
   {
     name: 'place_order',
-    description: 'Place the current cart as a Cash on Delivery order. Two steps: call without confirm_token to select Cash and get a summary + token (nothing is charged); call again with that token to place the order. ONLY pass the token after the user has explicitly approved the summary.',
+    description: 'Order the current cart. Two steps: call without confirm_token to get a summary + token (nothing is charged); call again with that token to place the order. ONLY pass the token after the user has explicitly approved the summary. Always pass payment_method explicitly rather than relying on the saved default - the default is one value for every platform, and the same string means different things on different ones (notably "upi" is Blinkit-only, and Zepto needs "upi_qr").',
     inputSchema: {
       type: 'object',
       properties: {
         platform: { type: 'string', enum: ['zepto', 'swiggy', 'swiggy-instamart', 'blinkit'], description: 'Platform to order on' },
-        payment_method: { type: 'string', description: 'Payment method the user chose: "cod" (all platforms), "upi_qr" (Zepto only; returns a QR image the user scans), "card" (Zepto, Blinkit; saved card, pass card_last4) or "upi" (Blinkit only; sends a collect request to upi_id that the user approves on their phone). Other modes are refused with the supported list.' },
+        payment_method: {
+          type: 'string',
+          description: 'Required, and always pass it explicitly. "cod" - Cash on Delivery, all platforms. "upi_qr" - Zepto only; returns a payment QR the user scans, valid a few minutes, and leaves the order pending until they pay. "upi" - Blinkit only; sends a collect request to upi_id that the user approves on their phone. "card" - Zepto and Blinkit; saved card, pass card_last4. An unsupported value is refused with the list that platform does support.',
+        },
         upi_id: { type: 'string', description: 'UPI ID (e.g. name@bank); required for payment_method "upi"' },
         card_last4: { type: 'string', description: 'Last 4 digits of the saved card; required for payment_method "card"' },
         confirm_token: { type: 'string', description: 'Token returned by step 1; places the order' },

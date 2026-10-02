@@ -10,8 +10,14 @@ Setup instructions for Claude, Cursor, and other MCP-compatible clients.
 |--------|--------|--------|
 | **Claude Desktop** | Config file | ✅ Ready |
 | **Cursor** | Config file | ✅ Ready |
-| **Claude Code** | Auto-discovery | 🚧 WIP |
+| **Claude Code** | `claude mcp add` | ✅ Ready |
 | **Windsurf** | Config file | ✅ Ready |
+
+For Claude Code, one command replaces the config file entirely:
+
+```bash
+claude mcp add quick-commerce -- npx -y quick-commerce-mcp
+```
 
 ---
 
@@ -159,8 +165,14 @@ If MCP is connected, you'll see results from the platform searches.
 - Ensure `dist/index.js` exists
 
 ### "Browser automation fails"
-- Install Playwright browsers: `npx playwright install chromium`
-- Install system deps: `sudo npx playwright install-deps chromium` (Linux)
+- This server drives your **installed Google Chrome** via Playwright's `chrome` channel, not Playwright's bundled Chromium. There is no browser to download — `npx playwright install chromium` installs something this server never launches.
+- If Chrome is installed somewhere unusual, point at it explicitly with the `QC_CHROME_PATH` env var in the server config (it takes precedence over the channel lookup):
+
+```json
+"env": { "QC_CHROME_PATH": "C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe" }
+```
+
+- On Linux you may also need Chrome's own shared libraries: `npx playwright install-deps chromium`
 
 ### MCP not appearing in client
 - Restart the client completely

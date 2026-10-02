@@ -12,6 +12,7 @@ Universal quick commerce aggregation via MCP - compare and order from Zepto, Bli
 - **Addresses**: `list_addresses` / `select_address` (retries once on flaky picker clicks)
 - **Store Notices**: Closed/unserviceable stores and "Add address to proceed" are detected and reported with next steps
 - **User Control**: Two-step `place_order` (preview token, then confirm); CVV read from `QC_CVV_<last4>`, never logged
+- **Scannable Payment QR**: UPI QR orders return the QR alone, at full resolution, cropped from the payment sheet — optionally opened in an image viewer so it is actually scannable
 - **OTP Handling**: Prompts for OTP when session expires
 
 ## 🚀 Quick Start
@@ -69,7 +70,7 @@ Sessions are saved to `~/.quick-commerce-mcp/sessions/` and expire eventually; j
 
 | Platform | Search | Cart | Order | Notes |
 |----------|--------|------|-------|-------|
-| Zepto | ✅ | ✅ | 🚧 | Cart, validation, order preview and `get_order_status` (order list) verified live; payment untested |
+| Zepto | ✅ | ✅ | 🚧 | Cart, validation, order preview, UPI QR payment and `get_order_status` (order list) verified live. The QR was generated and scanned end-to-end; the post-payment status *string* is not yet confirmed against the orders page |
 | Blinkit | ✅ | ✅ | ✅ | Full flow verified live: cart, preview, UPI payment and `get_order_status` (list + latest order detail) |
 | Swiggy Instamart | ✅ | ✅ | 🚧 | Cart + validation verified live; order preview not yet working; `get_order_status` not supported (orders page unreachable when tested) |
 
@@ -95,6 +96,22 @@ See [AUTHENTICATION.md](AUTHENTICATION.md) for login troubleshooting - rejected 
 "Compare prices for my cart"
 "What's the cheapest way to get these items?"
 ```
+
+### Pay by UPI QR
+```
+"Pay for my Zepto cart with a UPI QR"
+```
+
+The first call previews the order and stops. The second generates the QR,
+which is valid for a few minutes. It comes back cropped to the QR itself at full
+resolution, and the file path is always included. Run
+`set_preferences(open_qr: "true")` once to have it open in an image viewer
+automatically — see [below](#why-a-payment-qr-opens-in-a-separate-viewer) for
+why that is worth turning on.
+
+> Zepto only: pass `payment_method: "upi_qr"` explicitly. Your saved default is
+> used for every platform, and `upi` means something different on Blinkit than
+> it does on Zepto.
 
 ## 🔐 Security
 
@@ -133,8 +150,11 @@ to `~/.quick-commerce-mcp/sessions/` and its path returned in the message. Set
 - ✅ Search, add to cart, cart summary, clear cart
 - ✅ Price comparison, item resolution, cart validation, itemised bills
 - ✅ Address selection, store notices
+- ✅ UPI QR payment on Zepto (QR generated and scanned; Blinkit payment also verified)
 - ⚠️ Instamart checkout preview not yet working
-- ⚠️ Payment outcome strings are still unverified against the live pages
+- ⚠️ Payment outcome strings are still unverified against the live pages — a
+  payment is confirmed by the user, not read back from the platform
+- ⚠️ Instamart `place_order` not yet exercised on a live payment
 
 ## 🤝 Contributing
 

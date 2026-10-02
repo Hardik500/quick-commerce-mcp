@@ -28,35 +28,47 @@
 
 ## 🔧 MCP Tools (Capabilities)
 
-### 1. `search_products`
-**Input**: `{ "query": "coke zero", "platforms": ["zepto", "swiggy"], "location_pincode": "400001" }`  
-**Output**: Aggregated results with price comparison, availability, delivery time
+18 tools, grouped by what they do. Names below match `src/index.ts` exactly —
+that is the authoritative list, since it is what the assistant actually reads.
 
-### 2. `get_cart_summary`
-**Input**: `{ "platforms": ["all"], "items": [{"name": "Coke Zero", "quantity": 1}] }`  
-**Output**: Best platform recommendation + alternatives
+**Find and compare**
+- `search_products` — search one or more platforms, with cheapest-first pricing
+- `compare_prices` — price a shopping list across platforms, including the optimal split
+- `resolve_items` — rank matches for a loose description on one platform, without touching the cart
 
-### 3. `add_to_cart`
-**Input**: `{ "platform": "zepto", "items": [...], "confirm": false }`  
-**Output**: Cart preview with total, savings vs alternatives
+**Cart**
+- `add_to_cart` — add items, then show a validated cart preview
+- `remove_from_cart` — remove all of one product, identified by name
+- `get_cart_summary` — current cart contents and total
+- `clear_cart` — empty the cart
 
-### 4. `request_otp` (Helper)
-**Output**: "OTP sent to +91XXXXX. Please provide the 6-digit code."
+**Addresses**
+- `list_addresses` — saved delivery addresses with their ids
+- `select_address` — switch the live delivery address
 
-### 5. `confirm_order`
-**Input**: `{ "platform": "zepto", "cart_id": "...", "payment_method": "wallet" }`  
-**Output**: Order confirmation or failure reason
+**Login**
+- `check_login_status` — is each platform logged in
+- `request_otp` — enter the number and send the SMS
+- `submit_otp` — complete login with the code the user received
+- `logout` — delete a saved session, e.g. to log in with another number
+- `set_preferences` — save phone, pincode, UPI ID, default payment method, `open_qr`
 
-### 6. `get_order_history`
-**Output**: Past orders across all platforms (useful for reorders)
+**Ordering**
+- `get_order_preview` — items, itemised bill, address and payment options; charges nothing
+- `place_order` — two-step, with a confirm token; supports `cod`, `upi_qr` (Zepto), `upi` (Blinkit) and `card`
+- `get_order_status` — most recent order on Blinkit or Zepto; read-only
 
-### 7. `compare_prices`
-**Input**: Shopping list  
-**Output**: Optimal split across platforms for minimum total cost
+**Repair**
+- `diagnose_flow` — inspect and repair a broken selector against the live page,
+  with oracle-checked auto-repair, so a site redesign doesn't need a code change
 
 ---
 
 ## 🧠 Smart Features
+
+> **Not implemented.** These are product ideas, listed so they aren't lost — not
+> claims about what the server does today. Nothing below is currently built; see
+> [Shipped](#-shipped) for what is.
 
 ### Price Cataloguing
 - Cache product prices (refresh every 2 hours)
@@ -123,42 +135,39 @@ interface UserProfile {
 ```
 quick-commerce-mcp/
 ├── src/
+│   ├── index.ts              # MCP server entry, tool definitions and handlers
+│   ├── flows.ts              # Per-step selectors, fingerprints, oracle-checked repair
+│   ├── ranking.ts            # Product match ranking, cart validation, pack-size logic
+│   ├── preferences.ts        # ~/.quick-commerce-mcp/preferences.json
+│   ├── session-helper.ts     # Sessions, login CLI, QR capture and viewer launch
+│   ├── logic.test.ts         # Tests
+│   ├── engine/
+│   │   ├── stealth-browser.ts     # Installed-Chrome context, permissions, geolocation
+│   │   ├── resilient-selector.ts  # Selector fallback and self-repair
+│   │   └── stealth-script.ts
 │   ├── platforms/
-│   │   ├── zepto.ts      # Platform-specific automation
-│   │   ├── swiggy.ts
-│   │   └── base.ts       # Abstract base class
-│   ├── tools/
-│   │   ├── search.ts
-│   │   ├── cart.ts
-│   │   ├── order.ts
-│   │   └── compare.ts
-│   ├── cache/
-│   │   └── price_cache.ts
-│   ├── auth/
-│   │   └── session_manager.ts
-│   └── index.ts          # MCP server entry
-├── config/
-│   ├── selectors.json    # DOM selectors per platform
-│   └── platforms.yaml    # Feature flags
-├── data/
-│   ├── cache.db          # SQLite price cache
-│   └── users/            # Per-user session storage
-├── prompts/              # LLM prompts for parsing
-└── README.md
+│   │   ├── base.ts           # Abstract base class
+│   │   ├── zepto.ts
+│   │   ├── blinkit.ts
+│   │   └── swiggy-instamart.ts
+│   └── api/
+│       └── quick-commerce-api.ts
+├── dist/                     # Compiled output, committed and published
+└── *.md
 ```
 
+There is no `config/`, `data/` or `prompts/` directory. Selectors that need to be
+repaired at runtime live in `~/.quick-commerce-mcp/flows/<platform>.json`, which
+is written by `diagnose_flow` and preferred over the built-in ones — deliberately
+outside the repo, so a repair survives an npm update.
+
 ### MCP Server Config
-```json
-{
-  "name": "quick-commerce",
-  "version": "1.0.0",
-  "tools": [
-    { "name": "search_products", ... },
-    { "name": "add_to_cart", ... },
-    ...
-  ]
-}
-```
+The server speaks MCP over stdio and holds no config file of its own. Tools are
+declared in `src/index.ts`; per-user state lives under `~/.quick-commerce-mcp/`
+(`preferences.json`, `sessions/`, `flows/`). The only environment variable that
+changes behaviour is `QC_CHROME_PATH`, which points at a Chrome binary when the
+`chrome` channel lookup fails. Client-side setup is in
+[MCP_SETUP.md](MCP_SETUP.md).
 
 ---
 
@@ -171,10 +180,15 @@ quick-commerce-mcp/
 - ✅ User confirmation gates before payment
 - ✅ Address selection and management
 - ✅ Order history on Blinkit and Zepto
+- ✅ UPI QR payment on Zepto, returned as a full-resolution QR cropped from the
+  payment sheet (generated and scanned end-to-end), with optional auto-open in an
+  image viewer via `set_preferences(open_qr: "true")`
 
 ### Not Yet Working
 - [ ] Instamart checkout preview
-- [ ] Payment outcome detection verified against the live pages
+- [ ] Instamart `place_order` exercised against a live payment
+- [ ] Payment outcome detection verified against the live pages — a payment is
+      confirmed by the user, not read back from the platform
 
 ---
 

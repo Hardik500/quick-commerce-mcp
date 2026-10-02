@@ -68,6 +68,13 @@ test("parseBill: discounted items total and unknown charges", () => {
   assert.deepEqual(b.fees.map(f => f.amount), [30, 12, 15]);
 });
 
+test("parseBill: FREE delivery is waived, not charged", () => {
+  const b = parseBill(["Items total\nSaved ₹24\n₹325 ₹301", "Delivery charge\n₹30 FREE", "Handling charge\n₹12", "Grand total\n₹313"]);
+  assert.deepEqual(b.fees, [{ label: "Handling charge", amount: 12 }]);
+  assert.equal(b.subtotal + 12, b.total);
+});
+
+
 test("validateCart: missing, qty mismatch, bill reconcile", () => {
   const cart = { items: [{ name: "Coke", cartQuantity: 1 }], subtotal: 38, total: 80, fees: [{ amount: 30 }, { amount: 12 }] };
   const v = validateCart([{ name: "coke", quantity: 2 }, { name: "Paneer", quantity: 1 }], cart);

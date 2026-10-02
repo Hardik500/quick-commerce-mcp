@@ -24,7 +24,8 @@ export function parseBill(rows: string[]): { subtotal: number; total: number; fe
     const amounts = [...text.matchAll(/₹\s*([\d,]+(?:\.\d+)?)/g)].map(m => Number(m[1].replace(/,/g, '')));
     if (!amounts.length) continue; // header row
     const label = text.slice(0, text.indexOf('₹')).replace(/\s*Saved\s*$/i, '').trim();
-    const amount = amounts[amounts.length - 1];
+    // "Delivery charge ₹30 FREE": the amount shown is waived, not charged.
+    const amount = /\bFREE\b/.test(text) ? 0 : amounts[amounts.length - 1];
     if (/^items total/i.test(label)) subtotal = amount;
     else if (/^grand total/i.test(label)) total = amount;
     else if (amount) fees.push({ label, amount });

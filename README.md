@@ -49,9 +49,9 @@ Claude Code: `claude mcp add quick-commerce -- npx -y quick-commerce-mcp`
 
 | Platform | Search | Cart | Order | Notes |
 |----------|--------|------|-------|-------|
-| Zepto | ✅ | ✅ | 🚧 | Cart flow + validation + order preview verified live; payment untested |
-| Blinkit | ✅ | ✅ | 🚧 | Cart flow + validation verified live; full re-run and payment pending |
-| Swiggy Instamart | ✅ | ✅ | 🚧 | Cart flow + validation verified live; order preview success path untested (store was closed/unserviceable) |
+| Zepto | ✅ | ✅ | 🚧 | Cart, validation, order preview and `get_order_status` (order list) verified live; payment untested |
+| Blinkit | ✅ | ✅ | ✅ | Full flow verified live: cart, preview, UPI payment and `get_order_status` (list + latest order detail) |
+| Swiggy Instamart | ✅ | ✅ | 🚧 | Cart + validation verified live; order preview success path untested (store was closed/unserviceable); `get_order_status` not supported (orders page unreachable when tested) |
 | BigBasket | 🚧 | 🚧 | 🚧 | Coming in v1.1 |
 
 See [AUTHENTICATION.md](AUTHENTICATION.md) for how to log in to a platform and save a session.
@@ -125,7 +125,9 @@ This is a personal project. Open to suggestions!
 
 ## ⚠️ Disclaimer
 
-This tool automates browser interactions for personal convenience. Use responsibly and in accordance with platform Terms of Service.
+This is an unofficial project, not affiliated with Zepto, Blinkit or Swiggy. It automates a real browser logged in as you. Automating these sites may violate their Terms of Service and can get your account rate-limited or blocked; you use it at your own risk.
+
+`place_order` spends real money. It only runs after a two-step confirmation, but always check the order summary your assistant shows you before approving. Sessions (login cookies) are stored unencrypted in `~/.quick-commerce-mcp/sessions/`; keep that folder private.
 
 ---
 

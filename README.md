@@ -135,6 +135,11 @@ to `~/.quick-commerce-mcp/sessions/` and its path returned in the message. Set
 
 ## 🏗️ Architecture
 
+Each platform is driven through a single shared browser page, so tool calls that
+touch the **same** platform are serialised automatically — you can fire several at
+once and they queue rather than collide. Calls against **different** platforms run
+in parallel, so comparing three platforms is still concurrent.
+
 ```
 ┌─────────────┐     ┌─────────────┐     ┌─────────────┐
 │   Claude    │────▶│  MCP Server  │────▶│  Playwright │

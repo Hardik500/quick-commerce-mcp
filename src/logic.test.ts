@@ -5,6 +5,8 @@ import { BlinkitPlatform, parseBill } from './platforms/blinkit.js';
 import { parseZeptoBill } from './platforms/zepto.js';
 import { parseInstamartBill } from './platforms/swiggy-instamart.js';
 import type { Product } from './platforms/base.js';
+import { singleFlight } from './single-flight.js';
+import { keyedLock } from './keyed-lock.js';
 
 const prod = (o: Partial<Product>): Product =>
   ({ id: '1', name: 'Amul Milk', price: 30, quantity: '500 ml', inStock: true, platform: 'blinkit', ...o });
@@ -106,6 +108,137 @@ test("resolveItem: brand footer after | does not trigger synonym match", () => {
   const mk = (id: string, name: string) => ({ id, name, price: 38, quantity: "750 ml", inStock: true }) as any;
   const r = resolveItem("coke zero", [mk("1", "Sprite Zero | Lemon-Lime | The Coca-Cola Company"), mk("2", "Coca-Cola Zero Sugar PET| Cola | The Coca-Cola Company")]);
   assert.equal(r.status, "match"); assert.deepEqual(r.options.map(o => o.id), ["2"]);
+});
+
+test("singleFlight: concurrent callers share one run and one value", async () => {
+  // The shape that broke getPlatform: an awaiting factory called twice in the same
+  // tick. A has/set cache starts two runs and hands back two different objects.
+  let starts = 0;
+  const flight = singleFlight(async (key: string) => {
+    starts++;
+    await new Promise((r) => setTimeout(r, 5));
+    return { key, id: Math.random() };
+  });
+
+  const [a, b] = await Promise.all([flight("zepto"), flight("zepto")]);
+
+  assert.equal(starts, 1, "factory must run once for concurrent callers");
+  assert.equal(a, b, "both callers must receive the same value");
+});
+
+test("singleFlight: different keys run independently", async () => {
+  let starts = 0;
+  const flight = singleFlight(async (key: string) => { starts++; return key.toUpperCase(); });
+
+  assert.deepEqual(await Promise.all([flight("a"), flight("b"), flight("c")]), ["A", "B", "C"]);
+  assert.equal(starts, 3);
+});
+
+test("singleFlight: a later call reuses the settled value", async () => {
+  let starts = 0;
+  const flight = singleFlight(async () => ++starts);
+
+  assert.equal(await flight("k"), 1);
+  assert.equal(await flight("k"), 1);
+  assert.equal(starts, 1);
+  assert.equal(flight.has("k"), true);
+});
+
+test("singleFlight: a failure is not cached, so the next call retries", async () => {
+  let starts = 0;
+  const flight = singleFlight(async () => {
+    starts++;
+    if (starts === 1) throw new Error("browser would not launch");
+    return "ok";
+  });
+
+  await assert.rejects(() => flight("zepto"), /would not launch/);
+  assert.equal(await flight("zepto"), "ok", "a failed launch must not poison the key");
+  assert.equal(starts, 2);
+});
+
+test("singleFlight: invalidate forces a fresh run", async () => {
+  let starts = 0;
+  const flight = singleFlight(async () => ++starts);
+
+  assert.equal(await flight("k"), 1);
+  flight.invalidate("k");
+  assert.equal(flight.has("k"), false);
+  assert.equal(await flight("k"), 2);
+
+  flight.invalidate();
+  assert.equal(await flight("k"), 3);
+});
+
+test("keyedLock: same key runs one at a time, and sees no overlap", async () => {
+  const lock = keyedLock();
+  let active = 0, peak = 0;
+  const job = async () => {
+    active++; peak = Math.max(peak, active);
+    await new Promise((r) => setTimeout(r, 5));
+    active--;
+  };
+  await Promise.all([lock.run(["zepto"], job), lock.run(["zepto"], job), lock.run(["zepto"], job)]);
+  assert.equal(peak, 1, "work on one key must never overlap");
+});
+
+test("keyedLock: different keys still run in parallel", async () => {
+  const lock = keyedLock();
+  const order: string[] = [];
+  const slow = (name: string) => lock.run([name], async () => {
+    order.push(`start:${name}`);
+    await new Promise((r) => setTimeout(r, 20));
+    order.push(`end:${name}`);
+  });
+  await Promise.all([slow("zepto"), slow("blinkit")]);
+  // Both started before either finished, which is the point.
+  assert.equal(order[0].startsWith("start:"), true);
+  assert.equal(order[1].startsWith("end:"), false);
+});
+
+test("keyedLock: a shared key still serialises a multi-key caller", async () => {
+  const lock = keyedLock();
+  let active = 0, peak = 0;
+  const job = async () => {
+    active++; peak = Math.max(peak, active);
+    await new Promise((r) => setTimeout(r, 5));
+    active--;
+  };
+  await Promise.all([
+    lock.run(["zepto", "blinkit"], job),
+    lock.run(["zepto"], job),
+    lock.run(["blinkit", "instamart"], job),
+  ]);
+  assert.equal(peak, 1, "overlapping key sets must not run concurrently");
+});
+
+test("keyedLock: overlapping multi-key callers cannot deadlock", async () => {
+  const lock = keyedLock();
+  const done = await Promise.all([
+    lock.run(["a", "b", "c"], async () => "abc"),
+    lock.run(["b", "c"], async () => "bc"),
+    lock.run(["c"], async () => "c"),
+    lock.run(["a"], async () => "a"),
+  ]);
+  assert.deepEqual(done, ["abc", "bc", "c", "a"]);
+});
+
+test("keyedLock: the key is released even when the job throws", async () => {
+  const lock = keyedLock();
+  await assert.rejects(() => lock.run(["zepto"], async () => { throw new Error("boom"); }), /boom/);
+  assert.equal(await lock.run(["zepto"], async () => "still works"), "still works");
+});
+
+test("keyedLock: duplicate keys in one call are held once", async () => {
+  const lock = keyedLock();
+  let active = 0, peak = 0;
+  const job = async () => {
+    active++; peak = Math.max(peak, active);
+    await new Promise((r) => setTimeout(r, 5));
+    active--;
+  };
+  await lock.run(["zepto", "zepto", "zepto"], job);
+  assert.equal(peak, 1);
 });
 
 test("storeNotice: detects closed/unserviceable banners, ignores normal carts", () => {

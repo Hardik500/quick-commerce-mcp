@@ -18,6 +18,8 @@ import { QuickCommercePlatform, Product, SearchResult } from './platforms/base.j
 import { StealthBrowser } from './engine/stealth-browser.js';
 import { sessionPath } from './session-helper.js';
 import { loadPrefs, savePrefs } from './preferences.js';
+import { singleFlight } from './single-flight.js';
+import { keyedLock } from './keyed-lock.js';
 import { FLOW_STEPS, clearFlow, fingerprint, loadFlows, saveFlow, selfRepair, verifyFlow } from './flows.js';
 import * as fs from 'node:fs';
 import { relevant, rankByUnitPrice, resolveItem, unitPrice, validateCart } from './ranking.js';
@@ -59,6 +61,8 @@ async function searchOn(platformName: string, query: string): Promise<SearchResu
 // sessions (and any bot-detection fallout) stay isolated per platform.
 const platforms: Map<string, QuickCommercePlatform> = new Map();
 const browsers: Map<string, StealthBrowser> = new Map();
+// One operation per platform at a time - see src/keyed-lock.ts.
+const platformLocks = keyedLock();
 
 // One-time confirm tokens for place_order (step 2 must present the token from step 1).
 const orderTokens: Map<string, { platform: string; total: number; expires: number }> = new Map();
@@ -377,38 +381,39 @@ const TOOLS: Tool[] = [
 
 // Get or create platform instance, each backed by its own stealth browser
 // context restored from that platform's saved session (if any).
-async function getPlatform(name: string): Promise<QuickCommercePlatform> {
-  if (!platforms.has(name)) {
-    let platform: QuickCommercePlatform;
+//
+// singleFlight, not a plain has/set cache: launching a browser is awaited work,
+// so two concurrent callers would otherwise each launch their own context for the
+// same platform. See src/single-flight.ts for what that cost in practice.
+const getPlatform = singleFlight(async (name: string): Promise<QuickCommercePlatform> => {
+  let platform: QuickCommercePlatform;
 
-    switch (name) {
-      case 'zepto':
-        platform = new ZeptoPlatform();
-        break;
-      case 'swiggy':
-      case 'swiggy-instamart':
-        platform = new SwiggyInstamartPlatform();
-        break;
-      case 'blinkit':
-        platform = new BlinkitPlatform();
-        break;
-      default:
-        throw new Error(`Platform ${name} not supported`);
-    }
-
-    const stealth = new StealthBrowser();
-    const context = await stealth.launch({
-      headless: true,
-      storageStatePath: sessionPath(name),
-    });
-    browsers.set(name, stealth);
-
-    await platform.initialize(context);
-    platforms.set(name, platform);
+  switch (name) {
+    case 'zepto':
+      platform = new ZeptoPlatform();
+      break;
+    case 'swiggy':
+    case 'swiggy-instamart':
+      platform = new SwiggyInstamartPlatform();
+      break;
+    case 'blinkit':
+      platform = new BlinkitPlatform();
+      break;
+    default:
+      throw new Error(`Platform ${name} not supported`);
   }
 
-  return platforms.get(name)!;
-}
+  const stealth = new StealthBrowser();
+  const context = await stealth.launch({
+    headless: true,
+    storageStatePath: sessionPath(name),
+  });
+  browsers.set(name, stealth);
+
+  await platform.initialize(context);
+  platforms.set(name, platform);
+  return platform;
+});
 
 // Server setup
 const server = new Server(
@@ -432,6 +437,24 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
 server.setRequestHandler(CallToolRequestSchema, async (request) => {
   const { name, arguments: args } = request.params;
 
+  // Every platform is driven through one shared Playwright page, so two calls
+  // touching the same platform would abort each other's navigation and scrape
+  // each other's DOM. Serialise per platform; different platforms stay parallel.
+  return platformLocks.run(platformKeysOf(args), () => handle(name, args));
+});
+
+// Which platforms a call will drive, used to pick the lock keys. "all" expands
+// inside the handlers, so it is dropped here and those calls simply don't lock.
+function platformKeysOf(args: any): string[] {
+  const keys: string[] = [];
+  if (typeof args?.platform === 'string') keys.push(args.platform);
+  if (Array.isArray(args?.platforms)) {
+    for (const p of args.platforms) if (typeof p === 'string' && p !== 'all') keys.push(p);
+  }
+  return keys;
+}
+
+async function handle(name: string, args: any): Promise<any> {
   try {
     switch (name) {
       case 'search_products': {
@@ -767,6 +790,9 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         await browsers.get(platformName)?.close();
         browsers.delete(platformName);
         platforms.delete(platformName);
+        // Forget the memoised instance too, or the next call would hand back the
+        // context we just closed.
+        getPlatform.invalidate(platformName);
         fs.rmSync(sessionPath(platformName), { force: true });
         return { content: [{ type: 'text', text: `🚪 ${platformName}: session deleted. Use request_otp to log in again.` }] };
       }
@@ -1042,7 +1068,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       isError: true,
     };
   }
-});
+}
 
 // Start server
 async function main() {

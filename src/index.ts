@@ -644,9 +644,10 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         if (method === 'card' && !card_last4) return say('❌ Card selected: ask the user which saved card (last 4 digits) and pass it as card_last4.');
 
         if (!confirm_token) {
+          // Read the cart BEFORE arming: getCart navigates away and would disarm the checkout screen.
+          const preview = await platform.getCart();
           const r = await platform.placeOrder(payment_method, false, method === 'card' ? card_last4 : upi_id);
           if (!r.ready) return say(`❌ ${r.message}`);
-          const preview = await platform.getCart();
           const token = randomUUID();
           orderTokens.set(token, { platform: platformName, total: r.total!, expires: Date.now() + 5 * 60_000 });
           const items = preview?.items.map(i => `${i.cartQuantity}x ${i.name}`).join(', ') ?? '';

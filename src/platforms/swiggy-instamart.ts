@@ -542,8 +542,22 @@ export class SwiggyInstamartPlatform extends QuickCommercePlatform {
     const name = page.locator('[data-testid="address-name"]').first();
     await name.waitFor({ timeout: 15000 });
     await name.click({ timeout: 8000, force: true });
+
+    // The first click opens a sheet that lists only the current address plus a
+    // "See all" link; the full list of saved addresses is one more click away.
+    // Clicking "See all" is best-effort: the sheet already renders every row on
+    // some builds, and there the link is absent or covered.
     const heading = page.getByText('Select from saved address', { exact: true }).first();
-    await heading.waitFor({ timeout: 8000 });
+    if (!(await heading.waitFor({ timeout: 6000 }).then(() => true, () => false))) {
+      const seeAll = page.locator('[data-testid="address-selector-see-all"]').first();
+      if (await seeAll.isVisible().catch(() => false)) {
+        await seeAll.click({ timeout: 8000 }).catch(() => {});
+        await heading.waitFor({ timeout: 8000 });
+      }
+    }
+    if (!(await heading.isVisible().catch(() => false))) {
+      throw new Error("Instamart's saved-address list did not open");
+    }
     return heading.locator('xpath=../following-sibling::div[1]/div');
   }
 

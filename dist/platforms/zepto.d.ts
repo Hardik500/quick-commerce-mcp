@@ -71,13 +71,6 @@ export declare class ZeptoPlatform extends QuickCommercePlatform {
     private readCvv;
     /** Saved card: selecting the card row creates the pending order, so step 1 only verifies; step 2 selects, fills CVV, pays. */
     private placeCardOrder;
-    /**
-     * The QR graphic itself. MCP clients render images in a fixed-height box, so
-     * the full payment sheet (a 390x844 portrait) gets scrolled and the code ends
-     * up split across the fold - readable, but not scannable. A QR is a square and
-     * fits whole.
-     */
-    private qrLocator;
     /** UPI via QR: step 2 click creates a pending order and shows a QR (valid ~3.5 min) that the user scans. */
     private placeQrOrder;
 }

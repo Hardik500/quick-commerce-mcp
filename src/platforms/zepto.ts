@@ -18,7 +18,7 @@ import {
   CartItem,
   Address,
 } from './base.js';
-import { sessionPath, ensureSessionDir, saveQrImage, SCREENSHOT_OPTS, QR_OPTS } from '../session-helper.js';
+import { sessionPath, ensureSessionDir, saveQrImage, SCREENSHOT_OPTS } from '../session-helper.js';
 import { storeNotice } from '../ranking.js';
 import { selectorFor } from '../flows.js';
 
@@ -755,27 +755,6 @@ export class ZeptoPlatform extends QuickCommercePlatform {
     return { success: true, image, message: `"Make Payment" clicked for ${label}. Page now shows: ${text}` };
   }
 
-  /**
-   * The QR graphic itself. MCP clients render images in a fixed-height box, so
-   * the full payment sheet (a 390x844 portrait) gets scrolled and the code ends
-   * up split across the fold - readable, but not scannable. A QR is a square and
-   * fits whole.
-   */
-  private async qrLocator(page: Page): Promise<Locator | null> {
-    const labelled = page
-      .getByText(/Scan and pay using any UPI app/i)
-      .first()
-      .locator('xpath=preceding::*[self::canvas or self::img or self::svg][1]');
-    const canvas = page.locator('canvas').last();
-    for (const candidate of [labelled, canvas]) {
-      const box = await candidate.boundingBox({ timeout: 2000 }).catch(() => null);
-      if (!box || box.width < 40 || box.height < 40) continue;
-      const ratio = box.width / box.height;
-      if (ratio > 0.5 && ratio < 2) return candidate;
-    }
-    return null;
-  }
-
   /** UPI via QR: step 2 click creates a pending order and shows a QR (valid ~3.5 min) that the user scans. */
   private async placeQrOrder(confirm: boolean): Promise<any> {
     const page = this.page!;
@@ -796,15 +775,11 @@ export class ZeptoPlatform extends QuickCommercePlatform {
     await page.getByText(/QR/i).first().click({ timeout: 5000 });
     const valid = page.getByText(/QR code is valid for/i);
     await valid.waitFor({ timeout: 15000 });
-    // Capture just the QR, not the whole payment sheet. MCP clients render
-    // images in a fixed-height box: the full sheet is a 390x844 portrait, so
-    // the chat scrolls it and the QR ends up split across the fold - readable
-    // but not scannable. The QR is a small square and fits without scrolling.
-    const qr = await this.qrLocator(page);
-    const image = await (qr
-      ? qr.screenshot({ timeout: 5000, ...QR_OPTS })
-      : page.screenshot(SCREENSHOT_OPTS)
-    ).catch(() => page.screenshot(SCREENSHOT_OPTS));
+    const card = page.getByText(/Scan and pay using any UPI app/i).first()
+      .locator('xpath=ancestor::div[.//canvas or .//img or .//svg][1]');
+    const image = await card
+      .screenshot({ timeout: 5000, ...SCREENSHOT_OPTS })
+      .catch(() => page.screenshot(SCREENSHOT_OPTS));
     // ponytail: expiry from page text; payment result not polled yet.
     const expiry = (await valid.locator('xpath=..').innerText().catch(() => '')).replace(/\s+/g, ' ');
 

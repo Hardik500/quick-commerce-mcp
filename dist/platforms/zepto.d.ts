@@ -22,6 +22,19 @@ export declare function parseZeptoBill(rows: string[]): {
 export declare class ZeptoPlatform extends QuickCommercePlatform {
     private selectors;
     constructor();
+    /**
+     * Verdict from Zepto's own auth API. The OTP screen renders no error text at
+     * all on a rejected code, so scraping the DOM says nothing useful - only
+     * POST /api/auth/verify-otp knows. Recorded by the listener in initialize().
+     */
+    private authVerdict?;
+    /**
+     * Read through a method so the `= undefined` reset in sendOtp/submitOtp can't
+     * narrow the field to `never` at the later read sites.
+     */
+    private verdict;
+    /** When the current OTP was sent, to spot a code the user read too late. */
+    private otpRequestedAt?;
     initialize(context: BrowserContext): Promise<void>;
     /** Persist cookies + localStorage so the next run starts already logged in. */
     saveSession(): Promise<void>;
@@ -31,6 +44,12 @@ export declare class ZeptoPlatform extends QuickCommercePlatform {
         phone?: string;
     }>;
     sendOtp(phone: string): Promise<boolean>;
+    /**
+     * Open the login panel so its fields are inspectable. Without this a
+     * diagnosis of `phoneInput` would run against a homepage that has no phone
+     * field on it at all.
+     */
+    prepareForStep(step: string): Promise<void>;
     submitOtp(otp: string): Promise<boolean>;
     search(query: string): Promise<SearchResult>;
     private extractProductResults;

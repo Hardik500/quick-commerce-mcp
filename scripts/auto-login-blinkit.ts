@@ -44,12 +44,34 @@ async function main() {
     await page.waitForTimeout(1500);
   }
 
-  // Resolve the "Select your location" modal (geolocation permission is
-  // already granted by StealthBrowser).
+  // Resolve the "Select your location" modal. Blinkit hangs on this modal and it
+  // covers the header, so the profile button can't be clicked without it going.
+  // The geolocation permission is granted by StealthBrowser, but Chromium has no
+  // position source of its own, so the modal only closes if QC_GEOLOCATION
+  // supplies one; otherwise fall back to the pincode search.
   const useLocationBtn = await page.$('text=Use my location');
-  if (useLocationBtn) {
+  if (useLocationBtn && process.env.QC_GEOLOCATION) {
     await useLocationBtn.click();
     await page.waitForTimeout(3000);
+  } else {
+    const selectManually = await page.$('text=Select manually');
+    if (selectManually) {
+      await selectManually.click();
+      await page.waitForTimeout(1500);
+      const pincode = process.env.QC_PINCODE;
+      if (!pincode) {
+        console.error('❌ Blinkit wants a delivery location and QC_GEOLOCATION is not set.');
+        console.error('💡 Set QC_GEOLOCATION="<lat>,<lon>" or QC_PINCODE="<pincode>" and retry.');
+        await stealth.close();
+        return;
+      }
+      const box = await page.$('input[placeholder="search delivery location"]');
+      await box?.fill(pincode);
+      await page.waitForTimeout(3000);
+      const suggestion = await page.$('[class*="LocationSearchList__LocationListContainer"]');
+      await suggestion?.click();
+      await page.waitForTimeout(3000);
+    }
   }
 
   // Open the login modal via the profile icon.

@@ -87,6 +87,12 @@ export class QuickCommercePlatform {
     }
     /** Text of the most recent order (status, items, total), or null if unsupported/none. */
     async getLatestOrder() { return null; }
+    /**
+     * Put the page into the state where `step`'s element should exist, so a broken
+     * flow can be inspected rather than only reported. Override per platform; the
+     * default does nothing for steps that live on a page already loaded.
+     */
+    async prepareForStep(_step) { }
     /** Known payment option labels, matched against the payment screen text. */
     static PAYMENT_LABELS = [
         'Google Pay', 'GPay', 'PhonePe', 'Paytm', 'BHIM', 'CRED', 'Amazon Pay', 'Mobikwik',

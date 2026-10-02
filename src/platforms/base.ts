@@ -201,6 +201,13 @@ export abstract class QuickCommercePlatform {
   /** Text of the most recent order (status, items, total), or null if unsupported/none. */
   async getLatestOrder(): Promise<string | null> { return null; }
 
+  /**
+   * Put the page into the state where `step`'s element should exist, so a broken
+   * flow can be inspected rather than only reported. Override per platform; the
+   * default does nothing for steps that live on a page already loaded.
+   */
+  async prepareForStep(_step: string): Promise<void> {}
+
 
   /** Known payment option labels, matched against the payment screen text. */
   private static readonly PAYMENT_LABELS = [

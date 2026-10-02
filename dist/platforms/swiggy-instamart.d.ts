@@ -20,6 +20,22 @@ export declare class SwiggyInstamartPlatform extends QuickCommercePlatform {
     private selectors;
     constructor();
     initialize(context: BrowserContext): Promise<void>;
+    /**
+     * Swiggy puts up a "Share location to find the closest Instamart store" sheet
+     * on any session without a saved address, covering the header at z-index
+     * 10001 - the same gate Blinkit has. It renders after hydration, so it has to
+     * be waited for rather than queried once after navigation.
+     *
+     * The sheet is deliberately NOT dismissed here. "Share location" only
+     * succeeds when the context reports a real position, and Swiggy's own area
+     * search leads to a Google Maps view that leaves the page unusable for
+     * automation. The sheet carries its own Login button, which closes the sheet
+     * on click, so sendOtp logs in through that instead. A saved address is what
+     * actually needs a location, and list_addresses/select_address handle it once
+     * logged in.
+     *
+     * Returns a note about the sheet's presence, or null when there is none.
+     */
     private handleLocationPopup;
     checkLogin(): Promise<{
         loggedIn: boolean;

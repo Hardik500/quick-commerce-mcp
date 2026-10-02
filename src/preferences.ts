@@ -6,6 +6,8 @@ export interface Preferences {
   phone?: string;
   upi_id?: string;
   payment_method?: string;
+  /** Area / pincode typed into the platform's location search (Blinkit's "Select manually" path). */
+  pincode?: string;
 }
 
 const FILE = path.join(os.homedir(), '.quick-commerce-mcp', 'preferences.json');

@@ -14,6 +14,7 @@ import {
 } from './base.js';
 import { sessionPath, ensureSessionDir } from '../session-helper.js';
 import { storeNotice } from '../ranking.js';
+import { loadPrefs } from '../preferences.js';
 
 /**
  * Instamart bill is one text line per cell: label, then "struck original, actual" or a single amount or "FREE"
@@ -70,8 +71,10 @@ export class SwiggyInstamartPlatform extends QuickCommercePlatform {
     cartItemCount: '[data-testid="add_buttons_center"]',
     cartItemPrice: '[data-testid="cart-item-price"]',
     otpInput: 'input#otp',
-    // Location modal shown when the session has no saved address.
+    // Location sheet shown when the session has no saved address. The row that
+    // looks like a search box is a DIV; the input appears only after clicking it.
     setGpsButton: '[data-testid="set-gps-button"]',
+    locationSearchTrigger: '[data-testid="search-location"]',
   };
 
   constructor() {
@@ -87,22 +90,32 @@ export class SwiggyInstamartPlatform extends QuickCommercePlatform {
 
     await this.page.goto(this.baseUrl, { waitUntil: 'domcontentloaded', timeout: 30000 });
     await this.page.waitForLoadState('load', { timeout: 15000 }).catch(() => {});
-
-    await this.handleLocationPopup();
   }
 
-  private async handleLocationPopup(): Promise<void> {
-    if (!this.page) return;
-
-    try {
-      const gps = await this.page.$(this.selectors.setGpsButton);
-      if (gps) {
-        await gps.click();
-        await gps.waitForElementState('hidden', { timeout: 8000 }).catch(() => {});
-      }
-    } catch {
-      // No popup, that's fine
-    }
+  /**
+   * Swiggy puts up a "Share location to find the closest Instamart store" sheet
+   * on any session without a saved address, covering the header at z-index
+   * 10001 - the same gate Blinkit has. It renders after hydration, so it has to
+   * be waited for rather than queried once after navigation.
+   *
+   * The sheet is deliberately NOT dismissed here. "Share location" only
+   * succeeds when the context reports a real position, and Swiggy's own area
+   * search leads to a Google Maps view that leaves the page unusable for
+   * automation. The sheet carries its own Login button, which closes the sheet
+   * on click, so sendOtp logs in through that instead. A saved address is what
+   * actually needs a location, and list_addresses/select_address handle it once
+   * logged in.
+   *
+   * Returns a note about the sheet's presence, or null when there is none.
+   */
+  private async handleLocationPopup(): Promise<string | null> {
+    if (!this.page) return 'page not initialised';
+    const present = await this.page
+      .getByText('Share location to find the closest', { exact: false })
+      .first()
+      .waitFor({ state: 'visible', timeout: 6000 })
+      .then(() => true, () => false);
+    return present ? "Swiggy's \"Share location\" sheet is open" : null;
   }
 
   async checkLogin(): Promise<{ loggedIn: boolean; otpSent?: boolean; phone?: string }> {
@@ -137,18 +150,60 @@ export class SwiggyInstamartPlatform extends QuickCommercePlatform {
     const page = this.page;
     if (!page) throw new Error('Platform not initialized');
     await page.goto(this.baseUrl, { waitUntil: 'domcontentloaded', timeout: 30000 });
-    await this.handleLocationPopup();
+    const blocked = await this.handleLocationPopup();
     const tel = page.locator('[data-testid="input-field-tel-national"]');
-    if (!(await tel.count())) await page.locator('[data-testid="user-account-icon"]').click();
-    await tel.waitFor({ timeout: 15000 });
-    // fill() doesn't fire React's onChange here; type keystrokes and verify (early keystrokes get dropped before hydration).
-    for (let i = 0; i < 3; i++) {
-      await tel.click({ clickCount: 3 });
-      await page.keyboard.press('Backspace');
-      await page.keyboard.type(phone, { delay: 120 });
-      if ((await tel.inputValue()).replace(/\D/g, '') === phone) break;
+    if (!(await tel.count())) {
+      try {
+        // The location sheet has its own Login button, and it closes itself on
+        // click. That is the reliable way in: the header's account icon sits
+        // under the sheet's z-index 10001 backdrop and cannot be clicked at all.
+        const sheetLogin = page.locator('[data-testid="login-button"]').first();
+        if (await sheetLogin.waitFor({ state: 'visible', timeout: 3000 }).then(() => true, () => false)) {
+          await sheetLogin.click({ timeout: 10000 });
+        } else {
+          await page.locator('[data-testid="user-account-icon"]').click({ timeout: 10000 });
+        }
+      } catch {
+        // A bare timeout here means the sheet is still on top of the header;
+        // name it rather than reporting a click timeout.
+        const stillBlocked = await this.handleLocationPopup();
+        throw new Error(
+          `Could not reach Swiggy's login form: ${blocked ?? stillBlocked ?? 'the header was covered by a modal'}. ` +
+          'Save a pincode with set_preferences(pincode: "..."), or run ' +
+          '`npx -y -p quick-commerce-mcp quick-commerce-mcp-login swiggy-instamart` to log in by hand.',
+        );
+      }
     }
-    await page.locator('button:has-text("CONTINUE")').first().click();
+    await tel.waitFor({ timeout: 15000 });
+    // Clear, then type through the locator. `page.keyboard.type()` after a click
+    // drops the first character here, which reads as a 9-digit cap and is not
+    // one: the field accepts a full 10-digit number.
+    let typed = '';
+    for (let i = 0; i < 4 && typed !== phone; i++) {
+      await tel.click({ timeout: 5000 }).catch(() => {});
+      await tel.fill('').catch(() => {});
+      await tel.pressSequentially(phone, { delay: 60 }).catch(() => {});
+      typed = (await tel.inputValue().catch(() => '')).replace(/\D/g, '');
+      // The field intermittently swallows the last keystroke, so top the value
+      // up instead of discarding an otherwise correct number.
+      for (let j = 0; j < 2 && typed !== phone && typed.length < phone.length; j++) {
+        await tel.click({ timeout: 5000 }).catch(() => {});
+        await page.keyboard.press('End').catch(() => {});
+        await tel.pressSequentially(phone.slice(typed.length), { delay: 120 }).catch(() => {});
+        typed = (await tel.inputValue().catch(() => '')).replace(/\D/g, '');
+      }
+    }
+    // Never submit a number the field did not accept: Swiggy would text a
+    // different person than the one the user gave us.
+    if (typed !== phone) {
+      throw new Error(
+        `Swiggy's phone field only accepted ${typed.length} of ${phone.length} digits ("${typed}"), so no OTP was requested ` +
+        'rather than being sent to the wrong number. Indian mobile numbers start 6-9; a number starting with 0, 1 or 2 is ' +
+        'dropped to 9 digits by the site. Check the number with the user.',
+      );
+    }
+    const continueBtn = page.locator('button:has-text("CONTINUE")').first();
+    await continueBtn.click({ timeout: 10000 });
     return page.locator(this.selectors.otpInput).first().waitFor({ timeout: 15000 }).then(() => true, () => false);
   }
 

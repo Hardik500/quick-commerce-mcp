@@ -15,6 +15,32 @@ export interface StealthConfig {
   storageStatePath?: string;
 }
 
+/**
+ * Optional position override from QC_GEOLOCATION="<lat>,<lon>".
+ *
+ * The permission grant below is what actually unblocks Blinkit's "Select your
+ * location" modal. Blinkit always knows a coarse position anyway - it geolocates
+ * the request IP server-side and sets gr_1_lat/gr_1_lon, so the modal can be
+ * cleared without this. What the browser cannot do is produce a *precise*
+ * position: navigator.geolocation times out (code 3) in Playwright's Chromium,
+ * which has no OS location provider. So this override only exists to replace a
+ * bad IP guess (VPN/Tailscale exit node, wrong city) with a known-good point.
+ * Once logged in, list_addresses + select_address is the authoritative fix.
+ */
+function geolocationFix(): { latitude: number; longitude: number } | undefined {
+  const raw = process.env.QC_GEOLOCATION?.trim();
+  if (!raw) return undefined;
+  const [lat, lon] = raw.split(',').map(Number);
+  if (!Number.isFinite(lat) || !Number.isFinite(lon) || Math.abs(lat) > 90 || Math.abs(lon) > 180) {
+    console.error(`Ignoring QC_GEOLOCATION="${raw}": expected "<lat>,<lon>" within range.`);
+    return undefined;
+  }
+  return { latitude: lat, longitude: lon };
+}
+
+/** Overrides the "chrome" channel; only used to point tests at a local build. */
+export const CHROME_PATH_ENV = 'QC_CHROME_PATH';
+
 export class StealthBrowser {
   private browser: Browser | null = null;
   private context: BrowserContext | null = null;
@@ -33,8 +59,11 @@ export class StealthBrowser {
     // Chrome (channel: 'chrome') instead of Playwright's bundled Chromium,
     // since downloading/extracting the bundled browser is impractically
     // slow on machines with endpoint security scanning every written file.
+    // QC_CHROME_PATH takes precedence over the "chrome" channel, for pointing at
+    // a Chrome/Chromium build Playwright's channel lookup can't find.
+    const chromePath = process.env[CHROME_PATH_ENV]?.trim();
     this.browser = await chromium.launch({
-      channel: 'chrome',
+      ...(chromePath ? { executablePath: chromePath } : { channel: 'chrome' as const }),
       headless,
       slowMo,
       proxy: proxy ? { server: proxy } : undefined,
@@ -89,6 +118,13 @@ export class StealthBrowser {
       colorScheme: 'light',
       reducedMotion: 'no-preference',
       forcedColors: 'none',
+      // Blinkit's "Select your location" modal only closes when this permission
+      // is granted; it has no close button and ignores Escape and backdrop
+      // clicks. Without it the modal covers the page at z-index 10001, the
+      // profile button can never be clicked (30s Playwright timeout), and login
+      // is unreachable. Zepto's location prompt is the same shape.
+      permissions: ['geolocation'],
+      geolocation: geolocationFix(),
       storageState: storageStatePath && fs.existsSync(storageStatePath) ? storageStatePath : undefined,
     });
 

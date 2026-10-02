@@ -17,12 +17,33 @@ export declare class BlinkitPlatform extends QuickCommercePlatform {
     private selectors;
     constructor();
     initialize(context: BrowserContext): Promise<void>;
+    /**
+     * Clear the two interstitials a fresh Blinkit load puts up: the "Get the app"
+     * prompt, then the "Select your location" modal behind it.
+     *
+     * These render client-side after hydration, so each step waits for its own
+     * trigger rather than querying once after navigation - a plain `page.$()`
+     * right after `goto(domcontentloaded)` finds nothing and the modals survive.
+     * ReactModal reuses one overlay node for both, so wait on the text of the
+     * step you want, never on the overlay detaching.
+     *
+     * Returns the reason any modal survived, or null when the page is clear.
+     */
     private handleInitialPopups;
+    /**
+     * "Select manually" fallback for when geolocation doesn't resolve the modal.
+     * Types a place name / pincode into Blinkit's own search box and takes the
+     * first suggestion. Needs no coordinates, so the connector is never hard
+     * blocked on a position it cannot determine.
+     */
+    private clearLocationModalBySearch;
     checkLogin(): Promise<{
         loggedIn: boolean;
         otpSent?: boolean;
         phone?: string;
     }>;
+    /** Remembered so checkLogin can name the number the OTP went to. */
+    private otpPhone?;
     sendOtp(phone: string): Promise<boolean>;
     submitOtp(otp: string): Promise<boolean>;
     /** Persist cookies + localStorage so the next run starts already logged in. */

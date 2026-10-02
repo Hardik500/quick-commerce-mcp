@@ -13,6 +13,7 @@ import { BlinkitPlatform } from './platforms/blinkit.js';
 import { StealthBrowser } from './engine/stealth-browser.js';
 import { sessionPath } from './session-helper.js';
 import { loadPrefs, savePrefs } from './preferences.js';
+import { FLOW_STEPS, clearFlow, fingerprint, loadFlows, saveFlow, selfRepair, verifyFlow } from './flows.js';
 import * as fs from 'node:fs';
 import { relevant, rankByUnitPrice, resolveItem, unitPrice, validateCart } from './ranking.js';
 // One line per fee; platforms without itemisation fall back to a lump "Fees" line.
@@ -59,7 +60,17 @@ const SUPPORTED_PAYMENTS = {
     'swiggy-instamart': ['cod'],
 };
 /** Asked right after login: tells the agent to collect the payment mode (and UPI ID) up front. */
-const PAYMENT_PROMPT = '\n\n💳 Before ordering, ask the user how they want to pay and tell them what is supported:\n- Cash on Delivery ("cod"): Blinkit, Zepto, Instamart\n- UPI collect request ("upi", needs their UPI ID like name@bank; approved on their phone): Blinkit only\n- UPI QR (\"upi_qr\", the user scans a QR we send, valid ~3 min): Zepto only\n- Saved card (\"card\", needs the last 4 digits of a saved card; CVV is read from the QC_CVV_<last4> env var on the server): Zepto, Blinkit\n- New cards, wallets, netbanking, Pay Later: not supported.\nIf they choose UPI, ask for the UPI ID now. If they choose a card, ask which saved card (last 4 digits).';
+const PAYMENT_PROMPT = '\n\n💳 Before ordering, ask the user how they want to pay and tell them what is supported:\n- Cash on Delivery ("cod"): Blinkit, Zepto, Instamart\n- UPI collect request ("upi", needs their UPI ID like name@bank; approved on their phone): Blinkit only\n- UPI QR (\"upi_qr\", the user scans a QR we send, valid ~3 min): Zepto only\n- Saved card (\"card", needs the last 4 digits of a saved card; CVV is read from the QC_CVV_<last4> env var on the server): Zepto, Blinkit\n- New cards, wallets, netbanking, Pay Later: not supported.\nIf they choose UPI, ask for the UPI ID now. If they choose a card, ask which saved card (last 4 digits).';
+/**
+ * Part of the same ask, because Blinkit demands a delivery location *before*
+ * login and its geolocation is resolved from the request IP - which is wrong
+ * behind a VPN or when the machine's location isn't where the user orders from.
+ * The pincode is what lets the connector pick the right store.
+ */
+const PINCODE_ASK = '\n\n📍 Also ask for their 6-digit pincode and save it with set_preferences(pincode: "560001"). ' +
+    'Blinkit asks for a delivery location before login, and its automatic location comes from this ' +
+    "machine's IP, which is often not where the user actually orders. If they don't give one, login " +
+    'will fail with an error saying so - retry with a pincode rather than retrying unchanged.';
 // Tool definitions
 const TOOLS = [
     {
@@ -277,7 +288,7 @@ const TOOLS = [
     },
     {
         name: 'request_otp',
-        description: 'Start login: enter the phone number on the platform and trigger the OTP SMS. Then call submit_otp. Phone defaults to the saved one (set_preferences). To switch numbers, call logout first. Supported on Blinkit, Zepto and Instamart.',
+        description: 'Start login: enter the phone number on the platform and trigger the OTP SMS. Then call submit_otp. Phone defaults to the saved one (set_preferences). Blinkit also needs a saved pincode, or the request fails on its pre-login location check - ask the user for it and call set_preferences(pincode) if this fails. To switch numbers, call logout first. Supported on Blinkit, Zepto and Instamart.',
         inputSchema: {
             type: 'object',
             properties: {
@@ -298,14 +309,30 @@ const TOOLS = [
     },
     {
         name: 'set_preferences',
-        description: 'Save defaults used before ordering: phone (for login), upi_id (name@bank), payment_method (cod/upi/upi_qr/card). Pass an empty string to clear a value. Call with no arguments to just read the saved values.',
+        description: 'Save defaults used before ordering: phone (for login), pincode (6-digit delivery pincode - Blinkit asks for a location before login and cannot infer the right store from this machine\'s IP), upi_id (name@bank), payment_method (cod/upi/upi_qr/card). Ask for all of these once during onboarding, then pass an empty string to clear a value. Call with no arguments to just read the saved values.',
         inputSchema: {
             type: 'object',
             properties: {
                 phone: { type: 'string' },
                 upi_id: { type: 'string' },
                 payment_method: { type: 'string' },
+                pincode: { type: 'string' },
             },
+        },
+    },
+    {
+        name: 'diagnose_flow',
+        description: 'Repair a broken browser flow without a code change or update. Returns every interactive element currently on the page (with the attributes that identify it) so a working selector can be chosen, and can save that selector so all later runs use it. Call this when a flow fails with a selector/timeout error, before asking the user to do anything manual.',
+        inputSchema: {
+            type: 'object',
+            properties: {
+                platform: { type: 'string', enum: ['zepto', 'swiggy', 'swiggy-instamart', 'blinkit'], description: 'Platform whose flow broke' },
+                step: { type: 'string', enum: FLOW_STEPS, description: 'Which step to inspect/repair' },
+                selector: { type: 'string', description: 'New CSS selector for that step. Omit to only inspect the page.' },
+                apply: { type: 'boolean', description: 'Set true to save the selector (verified against the live page first). Defaults to false so you can review the page fingerprint before committing.' },
+                auto: { type: 'boolean', description: 'Set true to let the server repair the step itself: it enumerates the live page, ranks candidates by intent, and adopts one only after performing the step against it and confirming it worked. It refuses to guess when nothing can be proven, so this is safe to try before involving the user.' },
+            },
+            required: ['platform', 'step'],
         },
     },
     {
@@ -391,12 +418,12 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
                             });
                             continue;
                         }
-                        if (loginStatus.otpSent && loginStatus.phone) {
+                        if (loginStatus.otpSent) {
                             return {
                                 content: [
                                     {
                                         type: 'text',
-                                        text: `🔐 OTP required for ${platformName}\nPhone: ${loginStatus.phone}\n\nPlease provide the 6-digit OTP to continue.`,
+                                        text: `🔐 OTP required for ${platformName}${loginStatus.phone ? `\nPhone: ${loginStatus.phone}` : ''}\n\nPlease provide the OTP to continue.`,
                                     },
                                 ],
                             };
@@ -467,7 +494,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
                         responseText += `✅ ${status.platform}: Logged in\n`;
                     }
                     else if (status.otpSent) {
-                        responseText += `⏳ ${status.platform}: OTP sent to ${status.phone}\n`;
+                        responseText += `⏳ ${status.platform}: OTP sent${status.phone ? ` to ${status.phone}` : ''}\n`;
                     }
                     else {
                         responseText += `❌ ${status.platform}: Not logged in\n`;
@@ -475,6 +502,10 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
                 }
                 if (statuses.some(s => 'loggedIn' in s && s.loggedIn))
                     responseText += PAYMENT_PROMPT;
+                // Only nag while it's still missing - repeating it on every later call
+                // would just be noise once the user has given it.
+                if (!loadPrefs().pincode)
+                    responseText += PINCODE_ASK;
                 return {
                     content: [{ type: 'text', text: responseText }],
                 };
@@ -490,13 +521,16 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
                     }
                     const success = await platform.submitOtp(otp);
                     if (success) {
+                        const pincodeAsk = loadPrefs().pincode ? '' : PINCODE_ASK;
                         return {
-                            content: [{ type: 'text', text: `✅ Successfully logged in to ${platformName}${PAYMENT_PROMPT}` }],
+                            content: [{ type: 'text', text: `✅ Successfully logged in to ${platformName}${PAYMENT_PROMPT}${pincodeAsk}` }],
                         };
                     }
                     else {
+                        // The platform has nothing to add, so don't send the user off to
+                        // re-check a code the platform never actually judged.
                         return {
-                            content: [{ type: 'text', text: `❌ Failed to login. Please check OTP and try again.` }],
+                            content: [{ type: 'text', text: `❌ ${platformName} did not complete the login. Check the OTP screen in the browser; if it is gone, call check_login_status to see whether the session was saved.` }],
                         };
                     }
                 }
@@ -633,9 +667,16 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
                 const number = String(phone ?? loadPrefs().phone ?? '').replace(/\D/g, '').slice(-10);
                 if (number.length !== 10)
                     return { content: [{ type: 'text', text: '❌ Need a 10-digit phone number (pass phone, or save it with set_preferences).' }] };
+                // A pincode on file is what unblocks Blinkit's pre-login location
+                // check. Warn before the attempt, but still try: geolocation may resolve
+                // it without a pincode.
+                const preflight = platformName === 'blinkit' && !loadPrefs().pincode ? PINCODE_ASK + '\n\n' : '';
                 try {
                     const ok = await (await getPlatform(platformName)).sendOtp(number);
-                    return { content: [{ type: 'text', text: ok ? `📲 OTP sent to ${number} on ${platformName}. Ask the user for it, then call submit_otp.` : `❌ ${platformName}: OTP screen did not appear. Already logged in? Try check_login_status, or logout first.` }] };
+                    const msg = ok
+                        ? `📲 OTP sent to ${number} on ${platformName}. Ask the user for it, then call submit_otp.`
+                        : `❌ ${platformName}: OTP screen did not appear. Already logged in? Try check_login_status, or logout first.`;
+                    return { content: [{ type: 'text', text: preflight + msg }] };
                 }
                 catch (e) {
                     return { content: [{ type: 'text', text: `❌ ${e.message}` }] };
@@ -650,9 +691,16 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
                 return { content: [{ type: 'text', text: `🚪 ${platformName}: session deleted. Use request_otp to log in again.` }] };
             }
             case 'set_preferences': {
-                const { phone, upi_id, payment_method } = args;
-                const p = savePrefs({ phone, upi_id, payment_method });
-                return { content: [{ type: 'text', text: `⚙️ Saved preferences: phone=${p.phone ?? '-'}, upi_id=${p.upi_id ?? '-'}, payment_method=${p.payment_method ?? '-'}` }] };
+                const { phone, upi_id, payment_method, pincode } = args;
+                const p = savePrefs({ phone, upi_id, payment_method, pincode });
+                let out = `⚙️ Saved preferences: phone=${p.phone ?? '-'}, pincode=${p.pincode ?? '-'}, upi_id=${p.upi_id ?? '-'}, payment_method=${p.payment_method ?? '-'}`;
+                // A pincode that isn't a pincode can't be typed into Blinkit's
+                // location search, and it fails much later as a confusing "matched no
+                // suggestion" - so reject it here.
+                if (p.pincode && !/^\d{6}$/.test(p.pincode)) {
+                    out += `\n⚠️ "${p.pincode}" is not a 6-digit pincode; Blinkit's location search will not match it. Re-save with set_preferences(pincode: "560001") or pass '' to clear it.`;
+                }
+                return { content: [{ type: 'text', text: out }] };
             }
             case 'place_order': {
                 const prefs = loadPrefs();
@@ -803,6 +851,55 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
                         },
                     ],
                 };
+            }
+            case 'diagnose_flow': {
+                const { platform: platformName, step, selector, apply, auto } = args;
+                const say = (text) => ({ content: [{ type: 'text', text }] });
+                if (selector === '' || (apply === false && selector === '')) {
+                    const cleared = clearFlow(platformName, step);
+                    return say(`↩️ ${platformName}.${step} reverted to the built-in selector. Overrides now: ${JSON.stringify(cleared) || 'none'}`);
+                }
+                let platform;
+                try {
+                    platform = await getPlatform(platformName);
+                }
+                catch (e) {
+                    return say(`❌ Could not open ${platformName}: ${e.message}`);
+                }
+                const view = await platform.page;
+                if (!view)
+                    return say(`❌ ${platformName} has no page loaded.`);
+                // Put the page into the state the step lives in, otherwise the diagnosis
+                // runs against a screen that never contained the element.
+                const prepared = await platform
+                    .prepareForStep(step)
+                    .then(() => '')
+                    .catch((e) => ` (could not reach that screen: ${e.message.split('\n')[0]})`);
+                let text = `🔬 ${platformName} · ${step}${prepared}\n`;
+                text += `Current overrides: ${JSON.stringify(loadFlows(platformName)) || 'none'}\n\n`;
+                text += `Interactive elements on the page now:\n${await fingerprint(view)}\n`;
+                if (selector && apply) {
+                    // Never persist an unverified selector - one bad entry would wedge
+                    // every future run of that step.
+                    const ok = await verifyFlow(view, String(selector));
+                    if (!ok) {
+                        return say(`${text}\n❌ "${selector}" matches nothing on the page, so it was NOT saved. Pick a selector from the list above, or call this again with auto: true to let the server find one itself.`);
+                    }
+                    const saved = saveFlow(platformName, step, String(selector));
+                    return say(`${text}\n✅ Saved ${platformName}.${step} = "${selector}". It will be used ahead of the built-in on every future run, including after an update.\nAll overrides: ${JSON.stringify(saved)}`);
+                }
+                if (auto || !selector) {
+                    // Let the server repair it: enumerate the live DOM, score candidates
+                    // by intent, and adopt only the one the step actually works against.
+                    const outcome = await selfRepair(view, platformName, step, []);
+                    if ('selector' in outcome) {
+                        return say(`${text}\n🔧 Repaired itself: ${platformName}.${step} is now "${outcome.selector}" (verified by performing the step against it).`);
+                    }
+                    return say(`${text}\n🛑 Declined to guess.\n${outcome.blocked}\n` +
+                        (outcome.rejected.length ? `\nTried and rejected:\n${outcome.rejected.map(r => '  - ' + r).join('\n')}\n` : '') +
+                        'No selector was changed, so the current behaviour is unchanged.');
+                }
+                return say(text + '\nChoose a selector from the list and re-call with selector: "..." and apply: true - or with auto: true to let the server work it out.');
             }
             case 'clear_cart': {
                 const { platform: platformName, confirm } = args;

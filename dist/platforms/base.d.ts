@@ -127,6 +127,12 @@ export declare abstract class QuickCommercePlatform {
     abstract getOrderPreview(): Promise<OrderPreview | null>;
     /** Text of the most recent order (status, items, total), or null if unsupported/none. */
     getLatestOrder(): Promise<string | null>;
+    /**
+     * Put the page into the state where `step`'s element should exist, so a broken
+     * flow can be inspected rather than only reported. Override per platform; the
+     * default does nothing for steps that live on a page already loaded.
+     */
+    prepareForStep(_step: string): Promise<void>;
     /** Known payment option labels, matched against the payment screen text. */
     private static readonly PAYMENT_LABELS;
     protected scanPaymentMethods(text: string): string[];

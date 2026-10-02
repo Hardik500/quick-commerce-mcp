@@ -1,6 +1,7 @@
 import { QuickCommercePlatform, } from './base.js';
 import { sessionPath, ensureSessionDir } from '../session-helper.js';
 import { storeNotice } from '../ranking.js';
+import { loadPrefs } from '../preferences.js';
 /** Bill rows look like "Items total Saved ₹2 ₹195 ₹193" or "Handling charge ₹12": last ₹ amount is what's charged. */
 export function parseBill(rows) {
     let subtotal = 0, total = 0;
@@ -81,27 +82,90 @@ export class BlinkitPlatform extends QuickCommercePlatform {
         // Handle any initial popups (app-install interstitial, location prompt)
         await this.handleInitialPopups();
     }
+    /**
+     * Clear the two interstitials a fresh Blinkit load puts up: the "Get the app"
+     * prompt, then the "Select your location" modal behind it.
+     *
+     * These render client-side after hydration, so each step waits for its own
+     * trigger rather than querying once after navigation - a plain `page.$()`
+     * right after `goto(domcontentloaded)` finds nothing and the modals survive.
+     * ReactModal reuses one overlay node for both, so wait on the text of the
+     * step you want, never on the overlay detaching.
+     *
+     * Returns the reason any modal survived, or null when the page is clear.
+     */
     async handleInitialPopups() {
         if (!this.page)
-            return;
-        try {
-            // "Get the app" interstitial shown on every fresh page load.
-            const continueOnWeb = await this.page.$(this.selectors.continueOnWebLink);
-            if (continueOnWeb) {
-                await continueOnWeb.click();
-                await continueOnWeb.waitForElementState('hidden', { timeout: 5000 }).catch(() => { });
-            }
-            // "Select your location" modal - only appears if the session has no
-            // saved location yet (a fresh/expired login).
-            const useLocationBtn = await this.page.$(this.selectors.useLocationButton);
-            if (useLocationBtn) {
-                await useLocationBtn.click();
-                await useLocationBtn.waitForElementState('hidden', { timeout: 8000 }).catch(() => { });
-            }
+            return 'page not initialised';
+        const page = this.page;
+        const overlay = page.locator('.ReactModal__Overlay').first();
+        // Nothing to do once the session already has a location and no app prompt.
+        if (!(await overlay.waitFor({ state: 'visible', timeout: 6000 }).then(() => true, () => false))) {
+            return null;
         }
-        catch {
-            // Popups might not appear, that's fine
+        // "Get the app" interstitial. Clicking it reveals the location modal
+        // underneath, in the same overlay node.
+        const continueOnWeb = page.getByText('Continue on web', { exact: false }).first();
+        if (await continueOnWeb.waitFor({ state: 'visible', timeout: 5000 }).then(() => true, () => false)) {
+            await continueOnWeb.click({ timeout: 8000 }).catch(() => { });
         }
+        // "Select your location" - only shown when the session has no location yet.
+        // This modal has no close button and ignores both Escape and backdrop
+        // clicks, so it has to be dismissed through its own buttons.
+        const useLocation = page.getByText('Use my location', { exact: false }).first();
+        if (!(await useLocation.waitFor({ state: 'visible', timeout: 6000 }).then(() => true, () => false))) {
+            return null; // the interstitial was the only thing there, and it's gone
+        }
+        // "Use my location" is only worth trying when the context reports a real
+        // position. Blinkit's geolocation call otherwise times out (Playwright's
+        // Chromium has no OS location provider) and the sheet it swaps in - an
+        // empty GetLocationModal - never resolves, so it still blocks the page.
+        // Without QC_GEOLOCATION, go straight to the pincode search, which the
+        // site geocodes server-side and answers immediately.
+        if (process.env.QC_GEOLOCATION?.trim()) {
+            await useLocation.click({ timeout: 8000 }).catch(() => { });
+            if (await useLocation.waitFor({ state: 'hidden', timeout: 12000 }).then(() => true, () => false)) {
+                return null;
+            }
+            // Geolocation was configured but didn't land; fall through to the search.
+        }
+        return await this.clearLocationModalBySearch();
+    }
+    /**
+     * "Select manually" fallback for when geolocation doesn't resolve the modal.
+     * Types a place name / pincode into Blinkit's own search box and takes the
+     * first suggestion. Needs no coordinates, so the connector is never hard
+     * blocked on a position it cannot determine.
+     */
+    async clearLocationModalBySearch() {
+        const page = this.page;
+        const selectManually = page.getByText('Select manually', { exact: false }).first();
+        if (!(await selectManually.waitFor({ state: 'visible', timeout: 5000 }).then(() => true, () => false))) {
+            return 'Blinkit\'s "Select your location" modal is open and could not be dismissed';
+        }
+        await selectManually.click({ timeout: 8000 }).catch(() => { });
+        const box = page.locator('input[placeholder="search delivery location"]').first();
+        if (!(await box.waitFor({ state: 'visible', timeout: 6000 }).then(() => true, () => false))) {
+            return 'Blinkit\'s "Select your location" modal is open; its manual search box never appeared';
+        }
+        // The pincode/area to search for comes from the saved preferences so the
+        // same value is reused on every run.
+        const needle = loadPrefs().pincode;
+        if (!needle) {
+            return 'Blinkit asks for a delivery location before login and geolocation did not resolve it. ' +
+                'Save your pincode with set_preferences(pincode: "560001") to let the connector pick it, ' +
+                'or set the QC_GEOLOCATION "lat,lon" env var on the MCP server.';
+        }
+        await box.fill(needle, { timeout: 8000 }).catch(() => { });
+        // Suggestions are rows in the search sheet (LocationSearchList__LocationListContainer);
+        // the first one is the exact pincode match Blinkit geocoded.
+        const suggestion = page.locator('[class*="LocationSearchList__LocationListContainer"]').first();
+        if (!(await suggestion.waitFor({ state: 'visible', timeout: 10000 }).then(() => true, () => false))) {
+            return `Blinkit location modal is open and "${needle}" matched no suggestion`;
+        }
+        await suggestion.click({ timeout: 8000 }).catch(() => { });
+        const dismissed = await suggestion.waitFor({ state: 'hidden', timeout: 12000 }).then(() => true, () => false);
+        return dismissed ? null : `Blinkit location modal stayed open after selecting "${needle}"`;
     }
     async checkLogin() {
         if (!this.page)
@@ -121,7 +185,7 @@ export class BlinkitPlatform extends QuickCommercePlatform {
             const otpInput = await this.page.$(this.selectors.otpInput);
             if (otpInput) {
                 this.isLoggedIn = false;
-                return { loggedIn: false, otpSent: true };
+                return { loggedIn: false, otpSent: true, phone: this.otpPhone };
             }
             this.isLoggedIn = false;
             return { loggedIn: false };
@@ -131,19 +195,45 @@ export class BlinkitPlatform extends QuickCommercePlatform {
             return { loggedIn: false };
         }
     }
+    /** Remembered so checkLogin can name the number the OTP went to. */
+    otpPhone;
     async sendOtp(phone) {
         const page = this.page;
         if (!page)
             throw new Error('Platform not initialized');
-        await page.goto(this.baseUrl, { waitUntil: 'domcontentloaded', timeout: 30000 });
-        await this.handleInitialPopups();
-        const phoneInput = page.locator(this.selectors.phoneInput);
-        if (!(await phoneInput.count())) {
-            await page.locator(this.selectors.profileIcon).first().click();
+        this.otpPhone = phone;
+        const phoneInput = page.locator(this.selectors.phoneInput).first();
+        // Two attempts: a leftover modal from the first load is the usual reason the
+        // profile button can't be clicked, and re-running the dismissal after a
+        // failed click clears it.
+        for (let attempt = 0; attempt < 2; attempt++) {
+            await page.goto(this.baseUrl, { waitUntil: 'domcontentloaded', timeout: 30000 });
+            const blocked = await this.handleInitialPopups();
+            if (!(await phoneInput.count())) {
+                try {
+                    await page.locator(this.selectors.profileIcon).first().click({ timeout: 10000 });
+                }
+                catch {
+                    // A bare "Timeout 10000ms exceeded" here means an overlay is sitting
+                    // on top of the header; name it instead of reporting a click timeout.
+                    const stillBlocked = await this.handleInitialPopups();
+                    throw new Error(`Could not reach Blinkit's login form: ${blocked ?? stillBlocked ?? 'the header was covered by a modal'}. ` +
+                        'Set a pincode with set_preferences(pincode: "...") or a position with the QC_GEOLOCATION "lat,lon" env var, ' +
+                        'or run `npx -y -p quick-commerce-mcp quick-commerce-mcp-login blinkit` to log in by hand.');
+                }
+            }
+            try {
+                await phoneInput.fill(phone, { timeout: 10000 });
+                await page.locator(this.selectors.continueButton).first().click({ timeout: 10000 });
+            }
+            catch (e) {
+                if (attempt === 0)
+                    continue; // the phone box can be replaced by a re-render mid-flow
+                throw new Error(`Blinkit's login form did not accept the number: ${e.message.split('\n')[0]}`);
+            }
+            return page.locator(this.selectors.otpInput).first().waitFor({ timeout: 15000 }).then(() => true, () => false);
         }
-        await phoneInput.first().fill(phone, { timeout: 10000 });
-        await page.locator(this.selectors.continueButton).first().click();
-        return page.locator(this.selectors.otpInput).first().waitFor({ timeout: 15000 }).then(() => true, () => false);
+        return false;
     }
     async submitOtp(otp) {
         if (!this.page)

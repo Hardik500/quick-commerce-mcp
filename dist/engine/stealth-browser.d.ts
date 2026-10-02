@@ -14,6 +14,8 @@ export interface StealthConfig {
     };
     storageStatePath?: string;
 }
+/** Overrides the "chrome" channel; only used to point tests at a local build. */
+export declare const CHROME_PATH_ENV = "QC_CHROME_PATH";
 export declare class StealthBrowser {
     private browser;
     private context;

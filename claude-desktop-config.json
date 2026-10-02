@@ -1,12 +1,8 @@
 {
   "mcpServers": {
     "quick-commerce": {
-      "command": "node",
-      "args": ["/home/openclaw/.openclaw/workspace/quick-commerce-mcp/dist/index.js"],
-      "env": {
-        "NODE_ENV": "production",
-        "PLAYWRIGHT_BROWSERS_PATH": "0"
-      }
+      "command": "npx",
+      "args": ["-y", "quick-commerce-mcp"]
     }
   }
 }

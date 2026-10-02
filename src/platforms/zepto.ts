@@ -464,6 +464,21 @@ export class ZeptoPlatform extends QuickCommercePlatform {
     return cards;
   }
 
+  // ponytail: order list text only (status, total, time per order); no detail page parsing.
+  async getLatestOrder(): Promise<string | null> {
+    const page = this.page;
+    if (!page) throw new Error('Platform not initialized');
+    const seen = page.getByText(/₹\d+/).first();
+    // First cold load of /account/orders often renders blank; retry with a fresh navigation.
+    for (let i = 0; i < 2; i++) {
+      await page.goto(`${this.baseUrl}/account/orders`, { waitUntil: 'domcontentloaded', timeout: 45000 }).catch(() => {});
+      if (await seen.waitFor({ timeout: 15000 }).then(() => true, () => false)) {
+        return (await page.locator('body').innerText()).replace(/\s+/g, ' ').slice(0, 600);
+      }
+    }
+    return null;
+  }
+
   async getOrderPreview(): Promise<OrderPreview | null> {
     if (!this.page) throw new Error('Platform not initialized');
     const cart = await this.getCart();

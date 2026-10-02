@@ -16,24 +16,34 @@ Universal quick commerce aggregation via MCP - compare and order from Zepto, Bli
 
 ## 🚀 Quick Start
 
+**Requirements:** Node 18+ and Google Chrome installed (the server drives your Chrome, no browser download).
+
+**1. Log in once per platform** (opens a browser; log in, then press Ctrl+C):
+
 ```bash
-# Install dependencies
-npm install
+npx -y -p quick-commerce-mcp quick-commerce-mcp-login zepto   # also: blinkit, swiggy-instamart
+```
 
-# Build
-npm run build
+Sessions are saved to `~/.quick-commerce-mcp/sessions/`.
 
-# Configure MCP in Claude/Cursor
-# Add to your MCP settings:
+**2. Add the server to your MCP client** (Claude Desktop, Cursor, Windsurf):
+
+```json
 {
   "mcpServers": {
     "quick-commerce": {
-      "command": "node",
-      "args": ["/path/to/quick-commerce-mcp/dist/index.js"]
+      "command": "npx",
+      "args": ["-y", "quick-commerce-mcp"]
     }
   }
 }
 ```
+
+Claude Code: `claude mcp add quick-commerce -- npx -y quick-commerce-mcp`
+
+**3. Optional, for card payments:** export `QC_CVV_<last4>` in the client's `env` block. UPI needs no secret.
+
+**From source:** `npm install && npm run build`, then point the client at `node /path/to/dist/index.js`.
 
 ## 🛠️ Supported Platforms
 

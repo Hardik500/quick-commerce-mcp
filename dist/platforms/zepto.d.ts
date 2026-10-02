@@ -71,6 +71,17 @@ export declare class ZeptoPlatform extends QuickCommercePlatform {
     private readCvv;
     /** Saved card: selecting the card row creates the pending order, so step 1 only verifies; step 2 selects, fills CVV, pays. */
     private placeCardOrder;
+    /**
+     * The QR graphic on Zepto's payment sheet.
+     *
+     * Measured on the live sheet (2026-10-03): the QR is an inline
+     * `data:image/png;base64` <img> at 230x230. It is not a canvas and has no
+     * distinguishing class, and the sheet carries other square images - UPI app
+     * badges at ~86x96 and ~117x108 - which is why matching "a square graphic",
+     * or matching whatever sits near the caption, grabs the wrong one. The inline
+     * base64 payload is the only reliable discriminator.
+     */
+    private qrImage;
     /** UPI via QR: step 2 click creates a pending order and shows a QR (valid ~3.5 min) that the user scans. */
     private placeQrOrder;
 }

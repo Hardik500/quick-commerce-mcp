@@ -18,7 +18,7 @@ import {
   CartItem,
   Address,
 } from './base.js';
-import { sessionPath, ensureSessionDir, saveQrImage, SCREENSHOT_OPTS } from '../session-helper.js';
+import { sessionPath, ensureSessionDir, saveQrImage, QR_OPTS } from '../session-helper.js';
 import { storeNotice } from '../ranking.js';
 import { selectorFor } from '../flows.js';
 
@@ -755,6 +755,20 @@ export class ZeptoPlatform extends QuickCommercePlatform {
     return { success: true, image, message: `"Make Payment" clicked for ${label}. Page now shows: ${text}` };
   }
 
+  /**
+   * The QR graphic on Zepto's payment sheet.
+   *
+   * Measured on the live sheet (2026-10-03): the QR is an inline
+   * `data:image/png;base64` <img> at 230x230. It is not a canvas and has no
+   * distinguishing class, and the sheet carries other square images - UPI app
+   * badges at ~86x96 and ~117x108 - which is why matching "a square graphic",
+   * or matching whatever sits near the caption, grabs the wrong one. The inline
+   * base64 payload is the only reliable discriminator.
+   */
+  private qrImage(page: Page): Locator {
+    return page.locator('img[src^="data:image/png;base64,"]').last();
+  }
+
   /** UPI via QR: step 2 click creates a pending order and shows a QR (valid ~3.5 min) that the user scans. */
   private async placeQrOrder(confirm: boolean): Promise<any> {
     const page = this.page!;
@@ -775,26 +789,42 @@ export class ZeptoPlatform extends QuickCommercePlatform {
     await page.getByText(/QR/i).first().click({ timeout: 5000 });
     const valid = page.getByText(/QR code is valid for/i);
     await valid.waitFor({ timeout: 15000 });
-    const card = page.getByText(/Scan and pay using any UPI app/i).first()
-      .locator('xpath=ancestor::div[.//canvas or .//img or .//svg][1]');
-    const image = await card
-      .screenshot({ timeout: 5000, ...SCREENSHOT_OPTS })
-      .catch(() => page.screenshot(SCREENSHOT_OPTS));
+
+    // Return the QR alone. A full-sheet capture is a 390x844 portrait and clients
+    // render tool images in a fixed-height box, so the code splits across the fold
+    // and will not scan.
+    //
+    // Preferred path is the element's own inline base64 PNG: those are the exact
+    // bytes Zepto generated, so nothing is resampled or recompressed. The
+    // screenshot fallback is only used if the src is not a data URI, and captures
+    // at the QR's native CSS size.
+    const qr = this.qrImage(page);
+    await qr.waitFor({ state: 'attached', timeout: 5000 }).catch(() => undefined);
+    const dataUri = await qr
+      .getAttribute('src')
+      .catch(() => null)
+      .then((src) => (src?.startsWith('data:image/png;base64,') ? src : null))
+      .catch(() => null);
+    const image = dataUri
+      ? Buffer.from(dataUri.slice('data:image/png;base64,'.length), 'base64')
+      : await qr.screenshot({ timeout: 5000, ...QR_OPTS }).catch(() => undefined);
+
     // ponytail: expiry from page text; payment result not polled yet.
     const expiry = (await valid.locator('xpath=..').innerText().catch(() => '')).replace(/\s+/g, ' ');
 
-    // Some MCP clients (Claude Desktop included) silently drop image blocks from
-    // tool results, so also write the QR to a file the user can open. The image
-    // block is still returned for clients that do render it.
+    // Also write the QR to a file. Claude Desktop does render image blocks from
+    // tool results, but the inline image is downscaled to fit its box, and a phone
+    // camera pointed at a screen needs the full-resolution file.
     const file = saveQrImage(image, total);
     const how = file
-      ? 'The QR was saved to: ' + file + ' - open that file and scan it with any UPI app, because this chat may not render the QR inline.'
-      : 'Ask the user to scan it with any UPI app.';
+      ? 'Scan the QR above with any UPI app, or open the full-resolution copy at ' + file + '.'
+      : 'Scan the QR above with any UPI app.';
 
     return {
       success: true,
       image,
-      message: 'QR shown for Rs ' + total + '. ' + expiry + ' ' + how +
+      message:
+        'QR ready for Rs ' + total + '. ' + expiry + ' ' + how +
         ' An unpaid order stays pending until the QR expires.',
     };
   }

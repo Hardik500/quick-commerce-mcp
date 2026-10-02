@@ -45,21 +45,18 @@ export function sessionPath(platform: string): string {
   return path.join(SESSION_DIR, `${canonicalPlatform(platform)}-session.json`);
 }
 
-/** Where a payment QR is written for the user to open. Unique per attempt. */
 /**
- * Screenshot options that keep a payload inside the ~1 MB cap clients impose on
- * tool results (Claude Desktop drops anything larger without saying so).
+ * Screenshot options for general page captures: small enough to sit inside the
+ * ~1 MB cap clients impose on tool results (Claude Desktop drops anything larger
+ * without saying so), but still legible.
  *
  * The context runs at deviceScaleFactor 3, so a default PNG screenshot captures
- * 9x the pixels. Measured on this checkout UI: a full page was 628 KB base64 as
- * a 3x PNG - under the cap but close enough that the denser payment page crosses
- * it. `scale: 'css'` removes the 3x multiplier, which is what actually frees the
- * space.
- *
- * Quality stays high (q95) because the QR is the whole point and has to remain
- * scannable; at CSS scale it is ~44 KB, so there is no reason to compress it
- * further. Only the full-page fallback is large enough to matter, and it lands
- * near 100 KB at this setting.
+ * 9x the pixels - a full page measured 628 KB base64 as a 3x PNG, close enough to
+ * the cap that the denser payment page crosses it. `scale: 'css'` removes the 3x
+ * multiplier, which is what actually frees the space. JPEG at q95 is used because
+ * these captures are UI screenshots with text, where the file size matters and the
+ * hard edges of a QR are not involved. See QR_OPTS for the payment QR, which is
+ * the opposite trade.
  */
 export const SCREENSHOT_OPTS = {
   type: 'jpeg' as const,
@@ -67,6 +64,21 @@ export const SCREENSHOT_OPTS = {
   scale: 'css' as const,
 };
 
+/**
+ * Screenshot options for the payment QR: lossless PNG, because a QR is made of
+ * hard-edged modules and JPEG's ringing and chroma subsampling around those edges
+ * is exactly what stops scanners reading it. Quality is not a trade worth making
+ * here - at CSS scale a 230x230 crop is ~9 KB, so PNG costs nothing.
+ *
+ * `scale: 'css'` also keeps the capture at the QR's native 230x230 rather than
+ * upscaling it 3x, which is the highest fidelity available from a screenshot.
+ */
+export const QR_OPTS = {
+  type: 'png' as const,
+  scale: 'css' as const,
+};
+
+/** Where a payment QR is written for the user to open. Unique per attempt. */
 export function qrPath(total: number): string {
   const stamp = new Date().toISOString().replace(/[:.]/g, '-');
   return path.join(SESSION_DIR, `payment-qr-${stamp}-${total}.png`);
@@ -84,7 +96,10 @@ export function saveQrImage(image: Buffer | undefined, total: number): string | 
   if (!image?.length) return undefined;
   try {
     ensureSessionDir();
-    const file = qrPath(total).replace(/\.png$/, '.jpg');
+    // qrPath already ends in .png, which matches the PNG bytes QR_OPTS produces.
+    // The extension has to agree with the content or tools that sniff the file
+    // (and the user's file manager) show the QR as a broken image.
+    const file = qrPath(total);
     fs.writeFileSync(file, image);
     return file;
   } catch {

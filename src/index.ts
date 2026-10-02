@@ -202,7 +202,7 @@ const TOOLS: Tool[] = [
   },
   {
     name: 'get_order_status',
-    description: 'Show the most recent order (status, items, total) from order history. Read-only. Blinkit only for now.',
+    description: 'Show the most recent order (status, items, total) from order history. Read-only. Supported on Blinkit and Zepto (not yet Instamart).',
     inputSchema: {
       type: 'object',
       properties: { platform: { type: 'string', enum: ['zepto', 'swiggy', 'swiggy-instamart', 'blinkit'], description: 'Platform to check' } },

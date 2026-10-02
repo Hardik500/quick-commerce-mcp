@@ -762,17 +762,35 @@ export class ZeptoPlatform extends QuickCommercePlatform {
    * fits whole.
    */
   private async qrLocator(page: Page): Promise<Locator | null> {
-    const labelled = page
-      .getByText(/Scan and pay using any UPI app/i)
-      .first()
-      .locator('xpath=preceding::*[self::canvas or self::img or self::svg][1]');
-    const canvas = page.locator('canvas').last();
-    for (const candidate of [labelled, canvas]) {
-      const box = await candidate.boundingBox({ timeout: 2000 }).catch(() => null);
-      if (!box || box.width < 40 || box.height < 40) continue;
-      const ratio = box.width / box.height;
-      if (ratio > 0.5 && ratio < 2) return candidate;
+    // Walk up from the "Scan and pay" caption and take the first square graphic
+    // encountered. An XPath on the preceding axis was wrong here: `[1]` selects
+    // the FIRST in document order, i.e. the furthest away, which never matched
+    // the QR and silently fell back to a full-page screenshot.
+    const label = page.getByText(/Scan and pay using any UPI app/i).first();
+    if (await label.count().catch(() => 0)) {
+      const found = await page.evaluate(() => {
+        const caption = [...document.querySelectorAll('*')].find(e =>
+          /Scan and pay using any UPI app/i.test(e.textContent || '') && e.children.length === 0,
+        );
+        if (!caption) return null;
+        // Nearest preceding square graphic wins; fall back to any big canvas.
+        let best: { tag: string; score: number } | null = null;
+        for (const el of document.querySelectorAll('canvas, img, svg')) {
+          const r = el.getBoundingClientRect();
+          if (r.width < 40 || r.height < 40) continue;
+          const ratio = r.width / r.height;
+          if (ratio < 0.5 || ratio > 2) continue;
+          const precedes = Boolean(caption.compareDocumentPosition(el) & Node.DOCUMENT_POSITION_PRECEDING);
+          const score = (precedes ? 0 : 100) + Math.abs(ratio - 1);
+          if (!best || score < best.score) best = { tag: el.tagName.toLowerCase(), score };
+        }
+        return best?.tag ?? null;
+      }).catch(() => null);
+      if (found) return page.locator(found).last();
     }
+    const canvas = page.locator('canvas').last();
+    const box = await canvas.boundingBox({ timeout: 2000 }).catch(() => null);
+    if (box && box.width >= 40 && box.height >= 40) return canvas;
     return null;
   }
 
@@ -803,8 +821,17 @@ export class ZeptoPlatform extends QuickCommercePlatform {
     const qr = await this.qrLocator(page);
     const image = await (qr
       ? qr.screenshot({ timeout: 5000, ...QR_OPTS })
-      : page.screenshot(SCREENSHOT_OPTS)
-    ).catch(() => page.screenshot(SCREENSHOT_OPTS));
+      // No QR found: return nothing rather than a full-page shot the client will
+      // scroll and crop. The user still gets the file path only if one exists.
+      : Promise.reject(new Error('QR graphic not found'))
+    ).catch(async () => {
+      // Fall back to the whole sheet, but only as a saved file - an inline
+      // portrait image is unreadable in the chat panel.
+      const full = await page.screenshot(SCREENSHOT_OPTS).catch(() => undefined);
+      if (!full) return undefined;
+      saveQrImage(full, total);
+      return undefined;
+    });
     // ponytail: expiry from page text; payment result not polled yet.
     const expiry = (await valid.locator('xpath=..').innerText().catch(() => '')).replace(/\s+/g, ' ');
 

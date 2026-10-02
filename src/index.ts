@@ -201,6 +201,15 @@ const TOOLS: Tool[] = [
     },
   },
   {
+    name: 'get_order_status',
+    description: 'Show the most recent order (status, items, total) from order history. Read-only. Blinkit only for now.',
+    inputSchema: {
+      type: 'object',
+      properties: { platform: { type: 'string', enum: ['zepto', 'swiggy', 'swiggy-instamart', 'blinkit'], description: 'Platform to check' } },
+      required: ['platform'],
+    },
+  },
+  {
     name: 'get_order_preview',
     description: 'Preview the checkout for the current cart: items, bill, delivery address and available payment options. Does not place an order or charge anything.',
     inputSchema: {
@@ -597,6 +606,13 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         return {
           content: [{ type: 'text', text: responseText }],
         };
+      }
+
+      case 'get_order_status': {
+        const platform = platforms.get((args as any).platform);
+        if (!platform) return { content: [{ type: 'text', text: `❌ Platform not initialized. Search first.` }] };
+        const text = await platform.getLatestOrder();
+        return { content: [{ type: 'text', text: text ?? 'No order found (or not supported on this platform yet).' }] };
       }
 
       case 'get_order_preview': {

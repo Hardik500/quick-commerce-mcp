@@ -507,6 +507,22 @@ export class BlinkitPlatform extends QuickCommercePlatform {
     return ok;
   }
 
+  // ponytail: raw page text of the newest order's detail view; no structured parsing until the layout is known.
+  async getLatestOrder(): Promise<string | null> {
+    const page = this.page;
+    if (!page) throw new Error('Platform not initialized');
+    await page.goto('https://blinkit.com/account/orders', { waitUntil: 'domcontentloaded', timeout: 45000 });
+    const card = page.getByText(/₹\d+\s*•/).first();
+    if (!(await card.waitFor({ timeout: 15000 }).then(() => true, () => false))) return null;
+    const list = (await page.locator('body').innerText()).replace(/\s+/g, ' ');
+    // The ₹ line sits inside the card; click the whole card (nearest clickable ancestor).
+    await card.locator('xpath=ancestor::*[self::a or @role="button" or @onclick][1]').click({ timeout: 3000 })
+      .catch(() => card.click({ timeout: 3000 }).catch(() => {}));
+    await page.waitForFunction(l => document.body.innerText.replace(/\s+/g, ' ') !== l, list, { timeout: 8000 }).catch(() => {});
+    const detail = (await page.locator('body').innerText().catch(() => '')).replace(/\s+/g, ' ');
+    return `List: ${list.slice(0, 400)}\nLatest order detail: ${detail.slice(0, 1500)}`;
+  }
+
   async getOrderPreview(): Promise<OrderPreview | null> {
     if (!this.page) throw new Error('Platform not initialized');
     const cart = await this.getCart();

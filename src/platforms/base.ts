@@ -193,6 +193,10 @@ export abstract class QuickCommercePlatform {
    */
   abstract getOrderPreview(): Promise<OrderPreview | null>;
 
+  /** Text of the most recent order (status, items, total), or null if unsupported/none. */
+  async getLatestOrder(): Promise<string | null> { return null; }
+
+
   /** Known payment option labels, matched against the payment screen text. */
   private static readonly PAYMENT_LABELS = [
     'Google Pay', 'GPay', 'PhonePe', 'Paytm', 'BHIM', 'CRED', 'Amazon Pay', 'Mobikwik',

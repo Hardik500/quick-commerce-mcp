@@ -568,16 +568,36 @@ export class SwiggyInstamartPlatform extends QuickCommercePlatform {
     if (!cart || cart.items.length === 0) return null;
 
     try {
-      // 'Proceed to Pay' leads to /instamart/payment, which lists the methods.
-      // The page ends in either the pay button or a closed/unserviceable banner; wait for whichever shows first.
-      const btn = this.page.getByText(/proceed to pay/i).last();
+      // The cart footer button is "Proceed to Pay" only once a delivery address
+      // is set. Without one it reads "Select Address" and checkout cannot start,
+      // which is why the old wait for /proceed to pay/ just timed out. Select the
+      // saved address first, then come back for the real button.
+      const selectAddr = this.page.locator('[data-testid="cart-generic-footer-button"]').first();
+      const payBtn = this.page.getByText(/proceed to pay/i).last();
       const banner = this.page.getByText(/currently (unserviceable|closed)|not accepting orders|add address to proceed/i).first();
-      await btn.or(banner).waitFor({ timeout: 20000 });
-      if (!(await btn.isVisible())) {
-        console.error('Instamart store notice, no "Proceed to Pay" available:', await banner.innerText());
+      await selectAddr.or(payBtn).or(banner).first().waitFor({ timeout: 20000 });
+
+      if (await selectAddr.isVisible().catch(() => false)) {
+        const addresses = await this.getAddresses().catch(() => []);
+        if (addresses.length === 0) {
+          throw new Error(
+            'No delivery address is set on Instamart and none are saved. Add one in the app, then retry - ' +
+            'the cart shows "Select Address" instead of "Proceed to Pay" until it is set.',
+          );
+        }
+        if (!(await this.selectAddress('0'))) {
+          throw new Error('Could not select the saved Instamart address, so checkout cannot start.');
+        }
+        // The address pick navigates; come back to the cart for the pay button.
+        await this.page.goto(`${this.baseUrl}/cart`, { waitUntil: 'domcontentloaded', timeout: 30000 });
+        await payBtn.or(banner).first().waitFor({ timeout: 20000 });
+      }
+
+      if (!(await payBtn.isVisible().catch(() => false))) {
+        console.error('Instamart store notice, no "Proceed to Pay" available:', await banner.innerText().catch(() => '(no banner)'));
         return null;
       }
-      await btn.click({ timeout: 10000 });
+      await payBtn.click({ timeout: 10000 });
       await this.page.waitForURL(/payment/, { timeout: 15000 });
       await this.page.getByText(/UPI/i).first().waitFor({ timeout: 15000 });
       const text = await this.page.locator('body').innerText();

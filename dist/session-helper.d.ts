@@ -35,6 +35,17 @@ export declare const SCREENSHOT_OPTS: {
     quality: number;
     scale: "css";
 };
+/**
+ * Capture options for a cropped QR.
+ *
+ * PNG rather than JPEG: a QR is a hard edge pattern, and JPEG ringing around
+ * the modules is exactly what stops scanners from reading it. Once the crop
+ * removes the page, the PNG is small enough for the payload cap anyway.
+ */
+export declare const QR_OPTS: {
+    type: "png";
+    scale: "css";
+};
 export declare function qrPath(total: number): string;
 /**
  * Write a payment QR to disk so the user can open it.

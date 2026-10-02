@@ -84,6 +84,11 @@ export abstract class QuickCommercePlatform {
    */
   abstract checkLogin(): Promise<{ loggedIn: boolean; otpSent?: boolean; phone?: string }>;
 
+  /** Enter the phone number and request an OTP. Override per platform. */
+  async sendOtp(_phone: string): Promise<boolean> {
+    throw new Error('Not supported for this platform yet. Run `npx -y -p quick-commerce-mcp quick-commerce-mcp-login <platform>` instead.');
+  }
+
   /**
    * Submit OTP and complete login
    */

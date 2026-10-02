@@ -17,6 +17,8 @@ import { BlinkitPlatform } from './platforms/blinkit.js';
 import { QuickCommercePlatform, Product, SearchResult } from './platforms/base.js';
 import { StealthBrowser } from './engine/stealth-browser.js';
 import { sessionPath } from './session-helper.js';
+import { loadPrefs, savePrefs } from './preferences.js';
+import * as fs from 'node:fs';
 import { relevant, rankByUnitPrice, resolveItem, unitPrice, validateCart } from './ranking.js';
 
 // One line per fee; platforms without itemisation fall back to a lump "Fees" line.
@@ -284,6 +286,39 @@ const TOOLS: Tool[] = [
         address_id: { type: 'string', description: 'Address id from list_addresses' },
       },
       required: ['platform', 'address_id'],
+    },
+  },
+  {
+    name: 'request_otp',
+    description: 'Start login: enter the phone number on the platform and trigger the OTP SMS. Then call submit_otp. Phone defaults to the saved one (set_preferences). To switch numbers, call logout first. Blinkit only for now; others use the quick-commerce-mcp-login CLI.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        platform: { type: 'string', enum: ['zepto', 'swiggy-instamart', 'blinkit'] },
+        phone: { type: 'string', description: '10-digit mobile number (optional if saved)' },
+      },
+      required: ['platform'],
+    },
+  },
+  {
+    name: 'logout',
+    description: 'Delete the saved session for a platform (e.g. to log in with a different phone number).',
+    inputSchema: {
+      type: 'object',
+      properties: { platform: { type: 'string', enum: ['zepto', 'swiggy-instamart', 'blinkit'] } },
+      required: ['platform'],
+    },
+  },
+  {
+    name: 'set_preferences',
+    description: 'Save defaults used before ordering: phone (for login), upi_id (name@bank), payment_method (cod/upi/upi_qr/card). Pass an empty string to clear a value. Call with no arguments to just read the saved values.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        phone: { type: 'string' },
+        upi_id: { type: 'string' },
+        payment_method: { type: 'string' },
+      },
     },
   },
   {
@@ -644,8 +679,39 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         return { content: [{ type: 'text', text: responseText }] };
       }
 
+      case 'request_otp': {
+        const { platform: platformName, phone } = args as any;
+        const number = String(phone ?? loadPrefs().phone ?? '').replace(/\D/g, '').slice(-10);
+        if (number.length !== 10) return { content: [{ type: 'text', text: '❌ Need a 10-digit phone number (pass phone, or save it with set_preferences).' }] };
+        try {
+          const ok = await (await getPlatform(platformName)).sendOtp(number);
+          return { content: [{ type: 'text', text: ok ? `📲 OTP sent to ${number} on ${platformName}. Ask the user for it, then call submit_otp.` : `❌ ${platformName}: OTP screen did not appear. Already logged in? Try check_login_status, or logout first.` }] };
+        } catch (e: any) {
+          return { content: [{ type: 'text', text: `❌ ${e.message}` }] };
+        }
+      }
+
+      case 'logout': {
+        const { platform: platformName } = args as any;
+        await browsers.get(platformName)?.close();
+        browsers.delete(platformName);
+        platforms.delete(platformName);
+        fs.rmSync(sessionPath(platformName), { force: true });
+        return { content: [{ type: 'text', text: `🚪 ${platformName}: session deleted. Use request_otp to log in again.` }] };
+      }
+
+      case 'set_preferences': {
+        const { phone, upi_id, payment_method } = args as any;
+        const p = savePrefs({ phone, upi_id, payment_method });
+        return { content: [{ type: 'text', text: `⚙️ Saved preferences: phone=${p.phone ?? '-'}, upi_id=${p.upi_id ?? '-'}, payment_method=${p.payment_method ?? '-'}` }] };
+      }
+
       case 'place_order': {
-        const { platform: platformName, payment_method, confirm_token, upi_id, card_last4 } = args as any;
+        const prefs = loadPrefs();
+        const a = args as any;
+        const { platform: platformName, confirm_token, card_last4 } = a;
+        const payment_method = a.payment_method ?? prefs.payment_method;
+        const upi_id = a.upi_id ?? prefs.upi_id;
         const platform = platforms.get(platformName);
         if (!platform) return { content: [{ type: 'text', text: `❌ Platform not initialized. Search first.` }] };
         const say = (text: string) => ({ content: [{ type: 'text', text }] });

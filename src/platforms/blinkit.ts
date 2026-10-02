@@ -153,6 +153,20 @@ export class BlinkitPlatform extends QuickCommercePlatform {
     }
   }
 
+  async sendOtp(phone: string): Promise<boolean> {
+    const page = this.page;
+    if (!page) throw new Error('Platform not initialized');
+    await page.goto(this.baseUrl, { waitUntil: 'domcontentloaded', timeout: 30000 });
+    await this.handleInitialPopups();
+    const phoneInput = page.locator(this.selectors.phoneInput);
+    if (!(await phoneInput.count())) {
+      await page.locator(this.selectors.profileIcon).first().click();
+    }
+    await phoneInput.first().fill(phone, { timeout: 10000 });
+    await page.locator(this.selectors.continueButton).first().click();
+    return page.locator(this.selectors.otpInput).first().waitFor({ timeout: 15000 }).then(() => true, () => false);
+  }
+
   async submitOtp(otp: string): Promise<boolean> {
     if (!this.page) throw new Error('Platform not initialized');
 

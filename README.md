@@ -41,6 +41,8 @@ Sessions are saved to `~/.quick-commerce-mcp/sessions/`.
 
 Claude Code: `claude mcp add quick-commerce -- npx -y quick-commerce-mcp`
 
+**Setup from chat:** ask your assistant to run `set_preferences` (phone, UPI ID, default payment), `request_otp` then `submit_otp` to log in (Blinkit; other platforms use the CLI above), and `logout` to switch phone numbers. Preferences are saved in `~/.quick-commerce-mcp/preferences.json` and `place_order` uses them as defaults.
+
 **3. Optional, for card payments:** export `QC_CVV_<last4>` in the client's `env` block. UPI needs no secret.
 
 **From source:** `npm install && npm run build`, then point the client at `node /path/to/dist/index.js`.

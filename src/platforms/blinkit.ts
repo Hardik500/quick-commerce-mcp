@@ -518,7 +518,7 @@ export class BlinkitPlatform extends QuickCommercePlatform {
     // The ₹ line sits inside the card; click the whole card (nearest clickable ancestor).
     await card.locator('xpath=ancestor::*[self::a or @role="button" or @onclick][1]').click({ timeout: 3000 })
       .catch(() => card.click({ timeout: 3000 }).catch(() => {}));
-    await page.waitForFunction(l => document.body.innerText.replace(/\s+/g, ' ') !== l, list, { timeout: 8000 }).catch(() => {});
+    await page.waitForFunction(l => { const t = document.body.innerText.replace(/\s+/g, ' '); return t !== l && t.length > 80; }, list, { timeout: 15000 }).catch(() => {});
     const detail = (await page.locator('body').innerText().catch(() => '')).replace(/\s+/g, ' ');
     return `List: ${list.slice(0, 400)}\nLatest order detail: ${detail.slice(0, 1500)}`;
   }

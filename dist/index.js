@@ -85,7 +85,7 @@ const TOOLS = [
                 },
                 platforms: {
                     type: 'array',
-                    items: { type: 'string', enum: ['zepto', 'swiggy', 'swiggy-instamart', 'blinkit', 'bigbasket', 'all'] },
+                    items: { type: 'string', enum: ['zepto', 'swiggy', 'swiggy-instamart', 'blinkit', 'all'] },
                     description: 'Platforms to search on. Use "all" to search all supported platforms.',
                 },
             },
@@ -100,7 +100,7 @@ const TOOLS = [
             properties: {
                 platforms: {
                     type: 'array',
-                    items: { type: 'string', enum: ['zepto', 'swiggy', 'swiggy-instamart', 'blinkit', 'bigbasket', 'all'] },
+                    items: { type: 'string', enum: ['zepto', 'swiggy', 'swiggy-instamart', 'blinkit', 'all'] },
                     description: 'Platforms to check login status',
                 },
             },
@@ -115,7 +115,7 @@ const TOOLS = [
             properties: {
                 platform: {
                     type: 'string',
-                    enum: ['zepto', 'swiggy', 'swiggy-instamart', 'blinkit', 'bigbasket'],
+                    enum: ['zepto', 'swiggy', 'swiggy-instamart', 'blinkit'],
                     description: 'Platform to submit OTP for',
                 },
                 otp: {
@@ -146,7 +146,7 @@ const TOOLS = [
             properties: {
                 platform: {
                     type: 'string',
-                    enum: ['zepto', 'swiggy', 'swiggy-instamart', 'blinkit', 'bigbasket'],
+                    enum: ['zepto', 'swiggy', 'swiggy-instamart', 'blinkit'],
                     description: 'Platform to add items to',
                 },
                 items: {
@@ -178,7 +178,7 @@ const TOOLS = [
             properties: {
                 platform: {
                     type: 'string',
-                    enum: ['zepto', 'swiggy', 'swiggy-instamart', 'blinkit', 'bigbasket'],
+                    enum: ['zepto', 'swiggy', 'swiggy-instamart', 'blinkit'],
                     description: 'Platform to get cart from',
                 },
             },
@@ -255,7 +255,7 @@ const TOOLS = [
             properties: {
                 platform: {
                     type: 'string',
-                    enum: ['zepto', 'swiggy', 'swiggy-instamart', 'blinkit', 'bigbasket'],
+                    enum: ['zepto', 'swiggy', 'swiggy-instamart', 'blinkit'],
                     description: 'Platform to remove the item from',
                 },
                 item: { type: 'string', description: 'Item name as shown in get_cart_summary, e.g. "Amul Taaza Toned Milk"' },
@@ -343,7 +343,7 @@ const TOOLS = [
             properties: {
                 platform: {
                     type: 'string',
-                    enum: ['zepto', 'swiggy', 'swiggy-instamart', 'blinkit', 'bigbasket'],
+                    enum: ['zepto', 'swiggy', 'swiggy-instamart', 'blinkit'],
                     description: 'Platform to clear cart',
                 },
                 confirm: {
@@ -513,10 +513,10 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
             case 'submit_otp': {
                 const { platform: platformName, otp } = args;
                 try {
-                    const platform = platforms.get(platformName);
+                    const platform = await getPlatform(platformName);
                     if (!platform) {
                         return {
-                            content: [{ type: 'text', text: `❌ Platform ${platformName} not initialized. Search first.` }],
+                            content: [{ type: 'text', text: `❌ Platform ${platformName} could not be initialised.` }],
                         };
                     }
                     const success = await platform.submitOtp(otp);
@@ -555,10 +555,21 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
                     };
                 }
                 // Actually add to cart
-                const platform = platforms.get(platformName);
+                const platform = await getPlatform(platformName);
                 if (!platform) {
                     return {
-                        content: [{ type: 'text', text: `❌ Platform not initialized. Search first.` }],
+                        content: [{ type: 'text', text: `❌ Platform ${platformName} could not be initialised.` }],
+                    };
+                }
+                // search_products establishes login state before searching; add_to_cart has
+                // to do the same, because search() refuses to run without it. Skipping
+                // this left the search throwing "Not logged in", which the catch below
+                // swallowed, so the add then ran against the cart page and reported
+                // "Product not found" for an item that was perfectly findable.
+                const login = await platform.checkLogin().catch(() => ({ loggedIn: false }));
+                if (!login.loggedIn) {
+                    return {
+                        content: [{ type: 'text', text: `❌ Not logged in on ${platformName}. Call request_otp for ${platformName} first.` }],
                     };
                 }
                 // Items already in the cart have no ADD button; skip them (validation below flags quantity differences).
@@ -570,16 +581,29 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
                         results.push({ name: item.name, success: true, already: true });
                         continue;
                     }
-                    // addToCart clicks the product card on the current page, so bring the card up first.
-                    if (item.name)
-                        await platform.search(item.name).catch(() => null);
+                    // addToCart clicks the product card on the current page, so bring the
+                    // card up first. Product names carry a pack size ("... (750 ml)") that
+                    // the site itself omits from card labels, and searching for the full
+                    // string can return nothing at all - search on the product itself.
+                    if (item.name) {
+                        const query = item.name.replace(/\s*\([^)]*\)\s*$/, '').trim();
+                        // Don't swallow this: if the lookup fails, say so, rather than
+                        // letting addToCart report a misleading "product not found".
+                        const found = await platform.search(query || item.name).catch((e) => {
+                            results.push({ name: item.name, success: false, already: false, error: e.message.split('\n')[0] });
+                            return null;
+                        });
+                        if (!found)
+                            continue;
+                    }
                     const success = await platform.addToCart(item.productId, item.quantity);
                     results.push({ name: item.name ?? item.productId, success, already: false });
                 }
                 const failed = results.filter(r => !r.success).length;
                 let responseText = `${failed ? '⚠️' : '✅'} Added to cart on **${platformName.toUpperCase()}**${failed ? ` (${failed} of ${results.length} failed)` : ''}:\n\n`;
                 for (const result of results) {
-                    responseText += result.already ? `✓ ${result.name} (already in cart, not re-added)\n` : result.success ? `✓ ${result.name}\n` : `✗ ${result.name} (failed)\n`;
+                    const why = result.already ? ' (already in cart, not re-added)' : result.success ? '' : ` (failed${result.error ? `: ${result.error}` : ''})`;
+                    responseText += `${result.already ? '✓' : result.success ? '✓' : '✗'} ${result.name}${why}\n`;
                 }
                 // Verify against the real cart, not just the click results.
                 const cart = await platform.getCart();
@@ -607,10 +631,10 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
             }
             case 'get_cart_summary': {
                 const { platform: platformName } = args;
-                const platform = platforms.get(platformName);
+                const platform = await getPlatform(platformName);
                 if (!platform) {
                     return {
-                        content: [{ type: 'text', text: `❌ Platform not initialized. Search first.` }],
+                        content: [{ type: 'text', text: `❌ Platform ${platformName} could not be initialised.` }],
                     };
                 }
                 const cart = await platform.getCart();
@@ -639,9 +663,9 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
             }
             case 'get_order_preview': {
                 const { platform: platformName } = args;
-                const platform = platforms.get(platformName);
+                const platform = await getPlatform(platformName);
                 if (!platform) {
-                    return { content: [{ type: 'text', text: `❌ Platform not initialized. Search first.` }] };
+                    return { content: [{ type: 'text', text: `❌ Platform ${platformName} could not be initialised.` }] };
                 }
                 const preview = await platform.getOrderPreview();
                 if (!preview) {
@@ -708,9 +732,9 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
                 const { platform: platformName, confirm_token, card_last4 } = a;
                 const payment_method = a.payment_method ?? prefs.payment_method;
                 const upi_id = a.upi_id ?? prefs.upi_id;
-                const platform = platforms.get(platformName);
+                const platform = await getPlatform(platformName);
                 if (!platform)
-                    return { content: [{ type: 'text', text: `❌ Platform not initialized. Search first.` }] };
+                    return { content: [{ type: 'text', text: `❌ Platform ${platformName} could not be initialised.` }] };
                 const say = (text) => ({ content: [{ type: 'text', text }] });
                 const method = String(payment_method ?? '').toLowerCase();
                 const allowed = SUPPORTED_PAYMENTS[platformName] ?? [];
@@ -810,10 +834,10 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
             }
             case 'remove_from_cart': {
                 const { platform: platformName, item } = args;
-                const platform = platforms.get(platformName);
+                const platform = await getPlatform(platformName);
                 if (!platform) {
                     return {
-                        content: [{ type: 'text', text: `❌ Platform not initialized. Search first.` }],
+                        content: [{ type: 'text', text: `❌ Platform ${platformName} could not be initialised.` }],
                     };
                 }
                 const removed = await platform.removeFromCart(item);

@@ -73,6 +73,13 @@ test("validateCart: missing, qty mismatch, bill reconcile", () => {
     assert.equal(v.billOk, true);
     assert.equal(validateCart([], { ...cart, total: 99 }).billOk, false);
 });
+test("validateCart: pack size in the wanted name is ignored", () => {
+    // Search appends the pack size; the cart page omits it.
+    const cart = { items: [{ name: "Coca-Cola Zero Sugar PET - Cola Sparkling Soft Drink", cartQuantity: 1 }], subtotal: 38, total: 38, fees: [] };
+    const v = validateCart([{ name: "Coca-Cola Zero Sugar PET - Cola Sparkling Soft Drink (750 ml)", quantity: 1 }], cart);
+    assert.deepEqual(v.missing, []);
+    assert.deepEqual(v.wrongQty, []);
+});
 test("parseZeptoBill: waived fees are 0, savings rows ignored", () => {
     const b = parseZeptoBill(["Yay! You saved ₹47 on this order", "Item Total ₹125 ₹123", "Delivery Fee ₹30", "Handling Fee ₹10 FREE", "Late Night Fee ₹35 FREE", "To Pay ₹200 ₹153", "Discount on MRP ₹2", "Savings on Handling fee ₹10"]);
     assert.equal(b.subtotal, 123);

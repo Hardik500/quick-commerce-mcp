@@ -57,7 +57,15 @@ export function storeNotice(pageText) {
 // Compare what was requested with what the cart holds, and check items + fees = total.
 // ponytail: matches cart rows by case-insensitive name; Blinkit/Zepto cart rows carry no product id.
 export function validateCart(wanted, cart) {
-    const norm = (s) => s.toLowerCase().replace(/\s+/g, ' ').trim();
+    // Platforms label the same product differently: search results append the pack
+    // size ("... (750 ml)") while the cart page omits it. Compare on the product
+    // name without a trailing parenthesised pack size, or a correctly-added item
+    // reads as missing.
+    const norm = (s) => s
+        .toLowerCase()
+        .replace(/\s*\([^)]*\)\s*$/, '')
+        .replace(/\s+/g, ' ')
+        .trim();
     const missing = [], wrongQty = [];
     for (const w of wanted) {
         const row = cart.items.find(i => norm(i.name) === norm(w.name));

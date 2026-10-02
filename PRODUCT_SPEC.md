@@ -10,21 +10,19 @@
 
 **Problem**: Users waste time checking 3-4 apps for best prices, availability, and delivery slots.
 
-**Solution**: Single MCP interface that aggregates Zepto, Swiggy Instamart, BigBasket (and more) with intelligent recommendations.
+**Solution**: Single MCP interface that aggregates Zepto, Swiggy Instamart and Blinkit with intelligent recommendations.
 
 **Key Differentiator**: User stays in control - we assemble recommendations, they confirm before any money moves.
 
 ---
 
-## 📦 Supported Platforms (v1.0)
+## 📦 Supported Platforms
 
 | Platform | Status | Notes |
 |----------|--------|-------|
-| **Zepto** | ✅ Target | Fastest 10-min delivery |
-| **Swiggy Instamart** | ✅ Target | Good variety, better in some areas |
-| **BigBasket** | ✅ Target | Scheduled slots, bulk items |
-| **Blinkit** | 🎯 v1.1 | Similar to Zepto |
-| **JioMart** | 🎯 v1.2 | Lower prices, slower delivery |
+| **Zepto** | ✅ Working | Fastest 10-min delivery |
+| **Swiggy Instamart** | ✅ Working | Good variety, better in some areas |
+| **Blinkit** | ✅ Working | Similar to Zepto |
 
 ---
 
@@ -78,7 +76,7 @@
 - Proactive: "Milk running low based on history. Add to cart?"
 
 ### Split Order Logic
-- "Save ₹50 by ordering groceries from BigBasket + snacks from Zepto"
+- "Save ₹50 by ordering groceries from Instamart + snacks from Zepto"
 - Consider delivery fees in the calculation
 
 ---
@@ -128,7 +126,6 @@ quick-commerce-mcp/
 │   ├── platforms/
 │   │   ├── zepto.ts      # Platform-specific automation
 │   │   ├── swiggy.ts
-│   │   ├── bigbasket.ts
 │   │   └── base.ts       # Abstract base class
 │   ├── tools/
 │   │   ├── search.ts
@@ -165,25 +162,19 @@ quick-commerce-mcp/
 
 ---
 
-## 🎯 MVP Scope (v1.0)
+## 🎯 Current Scope
 
-### Must Have
-- [ ] Zepto automation (search, cart, order preview)
-- [ ] Swiggy Instamart automation
-- [ ] Basic price comparison across 2 platforms
-- [ ] OTP prompt flow
-- [ ] User confirmation gates
-- [ ] SQLite price caching
+### Shipped
+- ✅ Zepto, Swiggy Instamart and Blinkit automation (search, cart)
+- ✅ Price comparison across platforms
+- ✅ OTP login flow with saved sessions
+- ✅ User confirmation gates before payment
+- ✅ Address selection and management
+- ✅ Order history on Blinkit and Zepto
 
-### Should Have
-- [ ] BigBasket support
-- [ ] Address selection/management
-- [ ] Order history tracking
-
-### Nice to Have
-- [ ] Smart reordering suggestions
-- [ ] Optimal split calculation
-- [ ] Price drop alerts
+### Not Yet Working
+- [ ] Instamart checkout preview
+- [ ] Payment outcome detection verified against the live pages
 
 ---
 
@@ -212,25 +203,12 @@ quick-commerce-mcp/
 
 ## 🔄 Development Phases
 
-### Phase 1: Foundation (Week 1)
+### Done
 - MCP server scaffold
 - Playwright base class
-- Zepto implementation (most popular)
-
-### Phase 2: Multi-Platform (Week 2)
-- Swiggy Instamart
-- BigBasket (lower priority)
+- Zepto, Swiggy Instamart and Blinkit implementations
 - Price comparison logic
-
-### Phase 3: Intelligence (Week 3)
-- SQLite cache
-- Price history
-- Smart recommendations
-
-### Phase 4: Polish (Week 4)
-- Error handling
-- Health checks
-- Documentation
+- Error handling and documentation
 
 ---
 

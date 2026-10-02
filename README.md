@@ -71,8 +71,7 @@ Sessions are saved to `~/.quick-commerce-mcp/sessions/` and expire eventually; j
 |----------|--------|------|-------|-------|
 | Zepto | ✅ | ✅ | 🚧 | Cart, validation, order preview and `get_order_status` (order list) verified live; payment untested |
 | Blinkit | ✅ | ✅ | ✅ | Full flow verified live: cart, preview, UPI payment and `get_order_status` (list + latest order detail) |
-| Swiggy Instamart | ✅ | ✅ | 🚧 | Cart + validation verified live; order preview success path untested (store was closed/unserviceable); `get_order_status` not supported (orders page unreachable when tested) |
-| BigBasket | 🚧 | 🚧 | 🚧 | Coming in v1.1 |
+| Swiggy Instamart | ✅ | ✅ | 🚧 | Cart + validation verified live; order preview not yet working; `get_order_status` not supported (orders page unreachable when tested) |
 
 See [AUTHENTICATION.md](AUTHENTICATION.md) for login troubleshooting - rejected OTPs, missing delivery locations, and how to log in by hand when the automated flow won't cooperate.
 
@@ -118,26 +117,14 @@ See [AUTHENTICATION.md](AUTHENTICATION.md) for login troubleshooting - rejected 
                               └────────────────────┘
 ```
 
-## 📋 Roadmap
+## 📋 Status
 
-### v1.0 (Current)
-- [x] Zepto automation (login, search, add-to-cart)
-- [x] Blinkit automation (login, search, add-to-cart)
-- [x] Swiggy Instamart automation (login, search, add-to-cart, cart)
-- [x] Price comparison
-- [x] Basic cart management (add, get, remove, clear — verified on all 3 platforms)
-- [x] Cart validation, itemised bills, store-closed / no-address notices, address selection
-- [ ] Payment flows verified live (post-payment/3DS/OTP outcomes still guesses)
-
-### v1.1
-- [ ] BigBasket support
-- [ ] Scheduled reordering
-- [ ] Price alerts
-
-### v1.2
-- [ ] Smart recommendations
-- [ ] Optimal split calculation
-- [ ] Order history tracking
+- ✅ Login (OTP + saved session) on all three platforms
+- ✅ Search, add to cart, cart summary, clear cart
+- ✅ Price comparison, item resolution, cart validation, itemised bills
+- ✅ Address selection, store notices
+- ⚠️ Instamart checkout preview not yet working
+- ⚠️ Payment outcome strings are still unverified against the live pages
 
 ## 🤝 Contributing
 

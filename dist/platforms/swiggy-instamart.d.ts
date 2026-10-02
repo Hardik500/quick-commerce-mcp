@@ -50,6 +50,8 @@ export declare class SwiggyInstamartPlatform extends QuickCommercePlatform {
     private extractProductResults;
     private extractQuantity;
     addToCart(productId: string, quantity: number): Promise<boolean>;
+    /** Click through a located product card to put `quantity` in the cart. */
+    private addFromCard;
     getCart(): Promise<CartSummary | null>;
     private extractCartItems;
     private openCart;

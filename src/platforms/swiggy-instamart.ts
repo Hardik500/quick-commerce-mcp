@@ -338,18 +338,44 @@ export class SwiggyInstamartPlatform extends QuickCommercePlatform {
     if (!this.page) throw new Error('Platform not initialized');
 
     try {
-      // productId is the product name (see extractProductResults).
+      // productId is the product name (see extractProductResults). That name
+      // carries the pack size ("... (750 ml)") while the card's image alt does
+      // not, so an exact match never hits - match on the name up to a trailing
+      // parenthesised pack size instead.
+      const base = productId.replace(/\s*\([^)]*\)\s*$/, '').replace(/"/g, '\\"');
       const card = this.page
         .locator(this.selectors.searchResults)
-        .filter({ has: this.page.locator(`img[alt="${productId.replace(/"/g, '\\"')}"]`) })
+        .filter({ has: this.page.locator(`img[alt^="${base}"]`) })
         .first();
       if ((await card.count()) === 0) {
-        console.log('Product not found:', productId);
-        return false;
+        // Some listings use the bare name, so fall back to matching the card's
+        // own text before giving up.
+        const byText = this.page
+          .locator(this.selectors.searchResults)
+          .filter({ hasText: base.slice(0, 40) })
+          .first();
+        if ((await byText.count()) === 0) {
+          console.log('Product not found:', productId);
+          return false;
+        }
+        await this.addFromCard(byText, quantity);
+        return true;
       }
 
+      return this.addFromCard(card, quantity);
+    } catch (error) {
+      console.error('Error adding to cart:', error);
+      return false;
+    }
+  }
+
+  /** Click through a located product card to put `quantity` in the cart. */
+  private async addFromCard(card: Locator, quantity: number): Promise<boolean> {
+    const page = this.page;
+    if (!page) throw new Error('Platform not initialized');
+
       const cardPrice = await card.evaluate(
-        (c, sel) => c.parentElement!.querySelector(sel)?.textContent?.trim() || '',
+        (c, sel) => c.parentElement?.querySelector(sel)?.textContent?.trim() || '',
         this.selectors.productPrice
       );
 
@@ -357,7 +383,7 @@ export class SwiggyInstamartPlatform extends QuickCommercePlatform {
 
       // Multi-variant products open a bottom sheet; single-variant ones turn
       // into an inline stepper. Wait for the sheet, bounded.
-      const sheet = this.page.locator(this.selectors.variantSheet);
+      const sheet = page.locator(this.selectors.variantSheet);
       const sheetOpened = await sheet.waitFor({ state: 'visible', timeout: 2500 }).then(() => true, () => false);
       if (sheetOpened) {
         // Pick the variant matching the card's price (the single-unit pack),
@@ -365,7 +391,7 @@ export class SwiggyInstamartPlatform extends QuickCommercePlatform {
         const rows = sheet.locator(this.selectors.variantRow);
         let row = rows.first();
         for (let i = 0; i < (await rows.count()); i++) {
-          const p = await rows.nth(i).locator(this.selectors.variantPrice).textContent();
+          const p = await rows.nth(i).locator(this.selectors.variantPrice).textContent().catch(() => null);
           if (p?.trim() === cardPrice) {
             row = rows.nth(i);
             break;
@@ -386,16 +412,12 @@ export class SwiggyInstamartPlatform extends QuickCommercePlatform {
       }
 
       // Let the add request reach the server before the caller navigates away.
-      await this.page.waitForLoadState('networkidle', { timeout: 8000 }).catch(() => {});
+      await page.waitForLoadState('networkidle', { timeout: 8000 }).catch(() => {});
 
       // The card shows a quantity counter once the item is in the cart.
       const landed = await card.locator('[data-testid="buttonpair-count"]').waitFor({ state: 'visible', timeout: 5000 }).then(() => true, () => false);
-      if (!landed) console.log('Item did not land in cart:', productId);
+      if (!landed) console.log('Item did not land in cart');
       return landed;
-    } catch (error) {
-      console.error('Error adding to cart:', error);
-      return false;
-    }
   }
 
   async getCart(): Promise<CartSummary | null> {

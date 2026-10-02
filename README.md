@@ -43,11 +43,12 @@ Claude Desktop, Cursor, Windsurf (add to the client's MCP config, then restart i
 
 | Tool | What it does |
 |------|--------------|
-| `set_preferences` | Save phone, UPI ID, default payment method (`cod`/`upi`/`upi_qr`/`card`). No args = read. Empty string = clear. Stored in `~/.quick-commerce-mcp/preferences.json` |
+| `set_preferences` | Save phone, pincode, UPI ID, default payment method (`cod`/`upi`/`upi_qr`/`card`). No args = read. Empty string = clear. Stored in `~/.quick-commerce-mcp/preferences.json` |
 | `check_login_status` | Is each platform logged in? |
 | `request_otp` | Enter the phone number on the platform and send the OTP SMS (phone defaults to the saved one) |
 | `submit_otp` | Complete login with the OTP you received |
 | `logout` | Delete a platform's saved session (use before switching phone numbers) |
+| `diagnose_flow` | Inspect or repair a broken browser flow (e.g. after a site changes its markup) |
 | `list_addresses` / `select_address` | Pick the delivery address |
 
 Then shop: `search_products`, `compare_prices`, `resolve_items`, `add_to_cart`, `get_cart_summary`, `get_order_preview`, and finally `place_order` (preview first, then confirm with the token). `place_order` uses your saved UPI ID and payment method unless you override them.
@@ -73,7 +74,7 @@ Sessions are saved to `~/.quick-commerce-mcp/sessions/` and expire eventually; j
 | Swiggy Instamart | ✅ | ✅ | 🚧 | Cart + validation verified live; order preview success path untested (store was closed/unserviceable); `get_order_status` not supported (orders page unreachable when tested) |
 | BigBasket | 🚧 | 🚧 | 🚧 | Coming in v1.1 |
 
-See [AUTHENTICATION.md](AUTHENTICATION.md) for how to log in to a platform and save a session.
+See [AUTHENTICATION.md](AUTHENTICATION.md) for login troubleshooting - rejected OTPs, missing delivery locations, and how to log in by hand when the automated flow won't cooperate.
 
 ## 📝 Usage Examples
 

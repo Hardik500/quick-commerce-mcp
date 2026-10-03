@@ -10,6 +10,7 @@
  */
 import { BrowserContext, Locator } from 'playwright';
 import { LoginStatus, QuickCommercePlatform, SearchResult, CartSummary, OrderPreview } from './base.js';
+import type { AddOutcome } from '../engine/add-strategy.js';
 /** Zepto bill rows: "Item Total ₹125 ₹123", "Delivery Fee ₹30", "Handling Fee ₹10 FREE" (waived = 0). */
 export declare function parseZeptoBill(rows: string[]): {
     subtotal: number;
@@ -51,7 +52,7 @@ export declare class ZeptoPlatform extends QuickCommercePlatform {
     private extractProductResults;
     private extractCardQuantity;
     private extractQuantity;
-    addToCart(productId: string, quantity: number): Promise<boolean>;
+    addToCart(productId: string, quantity: number): Promise<AddOutcome>;
     private openCart;
     private lastPrice;
     getCart(): Promise<CartSummary | null>;

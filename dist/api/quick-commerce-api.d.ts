@@ -82,7 +82,7 @@ export declare class HybridQuickCommerceClient {
     private apiClient;
     private mode;
     constructor();
-    search(query: string, location?: string): Promise<ProductFromAPI[] | {
+    search(query: string, _location?: string): Promise<ProductFromAPI[] | {
         mode: string;
         message: string;
     }>;

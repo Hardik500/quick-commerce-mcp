@@ -10,8 +10,6 @@ export class ResilientSelectorEngine {
         if (!this.page)
             throw new Error('Page not initialized');
         const candidates = [];
-        // Get page context for AI analysis
-        const pageContext = await this.getPageContext();
         // Strategy: Look for semantic attributes and roles
         const semanticSelectors = await this.findSemanticElements(purpose);
         candidates.push(...semanticSelectors);

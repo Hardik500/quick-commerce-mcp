@@ -412,35 +412,27 @@ export class BlinkitPlatform extends QuickCommercePlatform {
             throw new Error('Platform not initialized');
         try {
             // The product's numeric id is the card's DOM id directly.
-            const product = await this.page.$(`div[id="${productId}"]`);
-            if (!product) {
+            const card = this.page.locator(`div[id="${productId}"]`).first();
+            if ((await card.count().catch(() => 0)) === 0) {
                 console.log('Product not found:', productId);
-                return false;
+                return 'absent';
             }
-            // Click add button
-            const addButton = await product.$(this.selectors.addToCartButton);
-            if (!addButton) {
-                console.log('Add to cart button not found');
-                return false;
+            // The ADD button turns into a -/qty/+ stepper once the item is in the
+            // cart; if it doesn't (e.g. out of stock), the add did not take. Both
+            // halves of the stepper count as proof, so a rename of one survives.
+            const outcome = await this.addViaCard(card, {
+                add: [this.selectors.addToCartButton],
+                landed: [this.selectors.incrementButton, this.selectors.decrementButton],
+                increment: [this.selectors.incrementButton],
+            }, quantity);
+            if (outcome !== 'added' && outcome !== 'already') {
+                console.log(`Add to cart did not complete (${outcome}):`, productId);
             }
-            await this.afterChange(() => addButton.click());
-            // The ADD button turns into a -/qty/+ stepper once the item is in the cart;
-            // if it doesn't (e.g. out of stock), the add failed.
-            const stepper = await product.waitForSelector(this.selectors.incrementButton, { timeout: 5000 }).catch(() => null);
-            if (!stepper) {
-                console.log('Item did not land in cart:', productId);
-                return false;
-            }
-            for (let i = 1; i < quantity; i++) {
-                const incrementBtn = await product.waitForSelector(this.selectors.incrementButton, { timeout: 5000 }).catch(() => null);
-                if (incrementBtn)
-                    await this.afterChange(() => incrementBtn.click());
-            }
-            return true;
+            return outcome;
         }
         catch (error) {
             console.error('Error adding to cart:', error);
-            return false;
+            return 'failed';
         }
     }
     async openCart() {
@@ -744,7 +736,7 @@ export class BlinkitPlatform extends QuickCommercePlatform {
         const checkout = frame.locator('button:visible', { hasText: /^Checkout$/ }).first();
         if (!confirm) {
             this.armedTotal = undefined;
-            if (!upiId || !/^[\w.\-]{2,}@[a-zA-Z]{2,}$/.test(upiId))
+            if (!upiId || !/^[\w.-]{2,}@[a-zA-Z]{2,}$/.test(upiId))
                 return { success: false, message: 'upi_id is required, e.g. name@bank.' };
             const preview = await this.getOrderPreview();
             if (!preview)

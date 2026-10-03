@@ -81,7 +81,7 @@ const SUPPORTED_PAYMENTS: Record<string, string[]> = {
 };
 
 /** Asked right after login: tells the agent to collect the payment mode (and UPI ID) up front. */
-const PAYMENT_PROMPT = '\n\n💳 Before ordering, ask the user how they want to pay and tell them what is supported:\n- Cash on Delivery ("cod"): Blinkit, Zepto, Instamart\n- UPI collect request ("upi", needs their UPI ID like name@bank; approved on their phone): Blinkit only\n- UPI QR (\"upi_qr\", the user scans a QR we send, valid ~3 min): Zepto only\n- Saved card (\"card", needs the last 4 digits of a saved card; CVV is read from the QC_CVV_<last4> env var on the server): Zepto, Blinkit\n- New cards, wallets, netbanking, Pay Later: not supported.\nIf they choose UPI, ask for the UPI ID now. If they choose a card, ask which saved card (last 4 digits).';
+const PAYMENT_PROMPT = '\n\n💳 Before ordering, ask the user how they want to pay and tell them what is supported:\n- Cash on Delivery ("cod"): Blinkit, Zepto, Instamart\n- UPI collect request ("upi", needs their UPI ID like name@bank; approved on their phone): Blinkit only\n- UPI QR ("upi_qr", the user scans a QR we send, valid ~3 min): Zepto only\n- Saved card ("card", needs the last 4 digits of a saved card; CVV is read from the QC_CVV_<last4> env var on the server): Zepto, Blinkit\n- New cards, wallets, netbanking, Pay Later: not supported.\nIf they choose UPI, ask for the UPI ID now. If they choose a card, ask which saved card (last 4 digits).';
 
 /**
  * Part of the same ask, because Blinkit demands a delivery location *before*
@@ -658,7 +658,12 @@ async function handle(name: string, args: any): Promise<any> {
         const norm = (s: string) => s.toLowerCase().replace(/\s+/g, ' ').trim();
         const existing = (await platform.getCart().catch(() => null))?.items ?? [];
         const results: { name: any; success: boolean; already: boolean; error?: string }[] = [];
-        for (const item of items) {
+        // Set when the page itself is in the wrong state, rather than one item
+        // being unavailable. Reported once at the end instead of per item.
+        let blocked = '';
+        const unattempted: string[] = [];
+        for (const [i, item] of items.entries()) {
+          const label = item.name ?? item.productId;
           if (item.name && existing.some(e => norm(e.name) === norm(item.name))) {
             results.push({ name: item.name, success: true, already: true });
             continue;
@@ -677,8 +682,25 @@ async function handle(name: string, args: any): Promise<any> {
             });
             if (!found) continue;
           }
-          const success = await platform.addToCart(item.productId, item.quantity);
-          results.push({ name: item.name ?? item.productId, success, already: false });
+          const outcome = await platform.addToCart(item.productId, item.quantity);
+          // A card with no add control is a fact about the page, not about this
+          // item: the search results were not in a state where anything could
+          // be clicked. Carrying on repeats the same doomed lookup for every
+          // remaining item, which is how one cart spent 110 seconds and added
+          // nothing. Stop, and hand back something the caller can act on.
+          if (outcome === 'absent') {
+            blocked = `\`${platformName}\` never offered an add-to-cart control on the search results page, so no further items were attempted. This is a page-state or site-change problem, not an out-of-stock one - run \`diagnose_flow\` with platform \`${platformName}\` and step \`addToCart\` to inspect and repair it (no code change or release needed).`;
+            unattempted.push(...items.slice(i + 1).map((x: any) => x.name ?? x.productId));
+            break;
+          }
+          results.push({
+            name: label,
+            success: outcome === 'added' || outcome === 'already',
+            already: outcome === 'already',
+            error: outcome === 'failed'
+              ? `the add control could not be clicked${platform.lastAddBlocker ? ` - ${platform.lastAddBlocker}` : ''}`
+              : undefined,
+          });
         }
 
         const failed = results.filter(r => !r.success).length;
@@ -687,6 +709,8 @@ async function handle(name: string, args: any): Promise<any> {
           const why = result.already ? ' (already in cart, not re-added)' : result.success ? '' : ` (failed${result.error ? `: ${result.error}` : ''})`;
           responseText += `${result.already ? '✓' : result.success ? '✓' : '✗'} ${result.name}${why}\n`;
         }
+        if (blocked) responseText += `\n🚫 ${blocked}\n`;
+        if (unattempted.length) responseText += `\nNot attempted: ${unattempted.join(', ')}\n`;
 
         // Verify against the real cart, not just the click results.
         const cart = await platform.getCart();

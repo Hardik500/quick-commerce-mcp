@@ -3,6 +3,7 @@
  * All platform implementations (Zepto, Swiggy, etc.) extend this
  */
 import { BrowserContext, Locator, Page } from 'playwright';
+import { AddOutcome } from '../engine/add-strategy.js';
 export interface Product {
     id: string;
     name: string;
@@ -81,6 +82,13 @@ export declare abstract class QuickCommercePlatform {
     protected page: Page | null;
     protected isLoggedIn: boolean;
     /**
+     * Why the last add failed, when the cause is something other than a missing
+     * button - e.g. "div#cookie-banner ... is covering it". Null when the add
+     * worked, or when it failed for want of a control. Read it immediately after
+     * `addToCart` returns 'failed'; it is overwritten by the next attempt.
+     */
+    lastAddBlocker: string | null;
+    /**
      * Whether `isLoggedIn` reflects a check this instance actually performed.
      *
      * Without it, `isLoggedIn` is only true if some earlier caller happened to
@@ -128,9 +136,14 @@ export declare abstract class QuickCommercePlatform {
      */
     abstract search(query: string): Promise<SearchResult>;
     /**
-     * Add product to cart
+     * Add product to cart.
+     *
+     * Returns a classified outcome rather than a boolean, because the caller has
+     * to act differently on each: 'already' is a success, and 'absent' means the
+     * page never offered a control to click, which is worth stopping a whole
+     * batch for instead of repeating the same doomed lookup per item.
      */
-    abstract addToCart(productId: string, quantity: number): Promise<boolean>;
+    abstract addToCart(productId: string, quantity: number): Promise<AddOutcome>;
     /**
      * Get current cart contents
      */
@@ -157,6 +170,56 @@ export declare abstract class QuickCommercePlatform {
      * sleeping a fixed time. Resolves anyway on timeout (action may be a no-op).
      */
     protected afterChange(action: () => Promise<unknown>, timeout?: number): Promise<void>;
+    /**
+     * Put `quantity` of the product on `card` into the cart, and prove it.
+     *
+     * This is the one operation every platform does the same way, and it is the
+     * one that used to be slowest: a single hardcoded add-button selector, and a
+     * click with no timeout of its own, so Playwright's 30s default applied and
+     * "element is not visible" was spent in full before giving up. With a
+     * multi-item cart that is 30s per item and no items added.
+     *
+     * Instead the click is bounded and escalated, and the outcome is a classified
+     * fact rather than a boolean. Each selector is resolved through the flow
+     * layer, so a `diagnose_flow` override for `addToCart`, `cartLanded` or
+     * `cartIncrement` takes effect here with no code change and no release.
+     *
+     * Waiting is fine; waiting to no purpose is not. Every rung either recovers
+     * the click or proves the item is in the cart, and the whole ladder is
+     * bounded by ADD_RUNGS.
+     */
+    protected addViaCard(card: Locator, spec: {
+        /** Ordered candidates for "this item is in the cart" (the stepper). */
+        landed: readonly string[];
+        /** Ordered candidates for the add control, best first. */
+        add: readonly string[];
+        /** Ordered candidates for the increment control. */
+        increment: readonly string[];
+        /**
+         * Runs after the first successful click and before the landed-proof is
+         * read, for platforms where clicking opens something that must then be
+         * filled in (a variant sheet). Returning true means the hook completed
+         * the add and proved it itself; returning false hands the proof back to
+         * the normal path.
+         */
+        between?: (card: Locator) => Promise<boolean>;
+    }, quantity?: number): Promise<AddOutcome>;
+    /**
+     * Raise an already-added item to `quantity`, one press at a time. The stepper
+     * is re-resolved before every press because it re-renders on each one, so a
+     * handle taken once would go stale and the second press would land nowhere.
+     *
+     * The short press budget is deliberate: reaching here means the stepper was
+     * just observed on the card, so it is present and interactive, and a press
+     * that cannot land in 3s is not going to land in 30. Without that bound a
+     * broken stepper would cost 10s per remaining unit - the same trap as the
+     * click this replaced, one level down.
+     *
+     * A press that cannot be completed leaves the single unit in the cart and
+     * stops. The caller reports the shortfall from the cart read-back, which
+     * re-counts what is actually there rather than trusting the click.
+     */
+    private topUp;
     /**
      * Select delivery address by id from getAddresses().
      */

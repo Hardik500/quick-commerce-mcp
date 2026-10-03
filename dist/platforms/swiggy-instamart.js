@@ -1,6 +1,7 @@
 import { QuickCommercePlatform, } from './base.js';
 import { sessionPath, ensureSessionDir } from '../session-helper.js';
 import { storeNotice } from '../ranking.js';
+import { pick } from '../flows.js';
 /**
  * Instamart bill is one text line per cell: label, then "struck original, actual" or a single amount or "FREE"
  * (e.g. "Handling Fee","₹12.83","₹12.00" / "Delivery Partner Fee","₹30.00","FREE"). Last amount is what's charged.
@@ -329,25 +330,24 @@ export class SwiggyInstamartPlatform extends QuickCommercePlatform {
                 .locator(this.selectors.searchResults)
                 .filter({ has: this.page.locator(`img[alt^="${base}"]`) })
                 .first();
-            if ((await card.count()) === 0) {
+            if ((await card.count().catch(() => 0)) === 0) {
                 // Some listings use the bare name, so fall back to matching the card's
                 // own text before giving up.
                 const byText = this.page
                     .locator(this.selectors.searchResults)
                     .filter({ hasText: base.slice(0, 40) })
                     .first();
-                if ((await byText.count()) === 0) {
+                if ((await byText.count().catch(() => 0)) === 0) {
                     console.log('Product not found:', productId);
-                    return false;
+                    return 'absent';
                 }
-                await this.addFromCard(byText, quantity);
-                return true;
+                return this.addFromCard(byText, quantity);
             }
             return this.addFromCard(card, quantity);
         }
         catch (error) {
             console.error('Error adding to cart:', error);
-            return false;
+            return 'failed';
         }
     }
     /** Click through a located product card to put `quantity` in the cart. */
@@ -355,45 +355,48 @@ export class SwiggyInstamartPlatform extends QuickCommercePlatform {
         const page = this.page;
         if (!page)
             throw new Error('Platform not initialized');
-        const cardPrice = await card.evaluate((c, sel) => c.parentElement?.querySelector(sel)?.textContent?.trim() || '', this.selectors.productPrice);
-        await card.locator(this.selectors.addToCartButton).click();
-        // Multi-variant products open a bottom sheet; single-variant ones turn
-        // into an inline stepper. Wait for the sheet, bounded.
-        const sheet = page.locator(this.selectors.variantSheet);
-        const sheetOpened = await sheet.waitFor({ state: 'visible', timeout: 2500 }).then(() => true, () => false);
-        if (sheetOpened) {
-            // Pick the variant matching the card's price (the single-unit pack),
-            // falling back to the first variant.
-            const rows = sheet.locator(this.selectors.variantRow);
-            let row = rows.first();
-            for (let i = 0; i < (await rows.count()); i++) {
-                const p = await rows.nth(i).locator(this.selectors.variantPrice).textContent().catch(() => null);
-                if (p?.trim() === cardPrice) {
-                    row = rows.nth(i);
-                    break;
+        // Multi-variant products open a bottom sheet after the click; single-variant
+        // ones turn into an inline stepper where buttonpair-add becomes the "+".
+        // Both are handled inside the shared ladder so the first click stays bounded
+        // and the result is still proved rather than assumed.
+        const outcome = await this.addViaCard(card, {
+            add: [this.selectors.addToCartButton],
+            landed: [this.selectors.cartItemCount],
+            increment: [this.selectors.addToCartButton],
+            between: async (c) => {
+                const sheet = page.locator(this.selectors.variantSheet);
+                const sheetOpened = await sheet
+                    .waitFor({ state: 'visible', timeout: 2500 })
+                    .then(() => true, () => false);
+                if (!sheetOpened)
+                    return false; // no sheet: the inline path proves it
+                const cardPrice = await c.evaluate((el, sel) => el.parentElement?.querySelector(sel)?.textContent?.trim() || '', this.selectors.productPrice);
+                // Pick the variant matching the card's price (the single-unit pack),
+                // falling back to the first variant.
+                const rows = sheet.locator(this.selectors.variantRow);
+                let row = rows.first();
+                for (let i = 0; i < (await rows.count().catch(() => 0)); i++) {
+                    const p = await rows.nth(i).locator(this.selectors.variantPrice).textContent().catch(() => null);
+                    if (p?.trim() === cardPrice) {
+                        row = rows.nth(i);
+                        break;
+                    }
                 }
-            }
-            await this.afterChange(() => row.locator(this.selectors.stepperAdd).click());
-            for (let i = 1; i < quantity; i++) {
-                await this.afterChange(() => row.locator(this.selectors.stepperPlus).click());
-            }
-            await sheet.locator(this.selectors.variantSheetClose).click();
-            await sheet.waitFor({ state: 'hidden', timeout: 5000 }).catch(() => { });
-        }
-        else {
-            // Single-variant: ADD turns into an inline stepper; the same
-            // buttonpair-add element is the "+" button.
-            for (let i = 1; i < quantity; i++) {
-                await this.afterChange(() => card.locator(this.selectors.addToCartButton).click());
-            }
-        }
-        // Let the add request reach the server before the caller navigates away.
-        await page.waitForLoadState('networkidle', { timeout: 8000 }).catch(() => { });
-        // The card shows a quantity counter once the item is in the cart.
-        const landed = await card.locator('[data-testid="buttonpair-count"]').waitFor({ state: 'visible', timeout: 5000 }).then(() => true, () => false);
-        if (!landed)
-            console.log('Item did not land in cart');
-        return landed;
+                await row.locator(this.selectors.stepperAdd).click({ timeout: 8000 }).catch(() => { });
+                for (let i = 1; i < quantity; i++) {
+                    await row.locator(this.selectors.stepperPlus).click({ timeout: 8000 }).catch(() => { });
+                }
+                await sheet.locator(this.selectors.variantSheetClose).click({ timeout: 8000 }).catch(() => { });
+                await sheet.waitFor({ state: 'hidden', timeout: 5000 }).catch(() => { });
+                // Let the add request reach the server before reading the card back.
+                await page.waitForLoadState('networkidle', { timeout: 8000 }).catch(() => { });
+                const proof = await pick(c, this.name, 'cartLanded', [this.selectors.cartItemCount], 5000);
+                return !!proof && (await proof.locator.isVisible().catch(() => false));
+            },
+        }, quantity);
+        if (outcome !== 'added' && outcome !== 'already')
+            console.log(`Add to cart did not complete (${outcome})`);
+        return outcome;
     }
     async getCart() {
         if (!this.page)

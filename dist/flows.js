@@ -19,6 +19,11 @@ export const FLOW_STEPS = [
     'loginTrigger', 'phoneInput', 'otpInput', 'otpSubmit',
     'locationModal', 'locationSearch', 'locationSuggestion',
     'productCard', 'productName', 'productPrice', 'cartItem', 'addToCart',
+    // The two selectors that decide whether an add actually worked. They break
+    // as often as the button does - a site that renames its ADD control usually
+    // renames the quantity stepper in the same deploy - and until they have an
+    // override there was no way to correct them without a code change.
+    'cartLanded', 'cartIncrement',
 ];
 function filePath(platform) {
     return path.join(FLOW_DIR, `${platform}.json`);
@@ -65,12 +70,18 @@ export function selectorFor(platform, step, builtin) {
  * Resolve a step to a locator, trying the override first and then each built-in
  * candidate in turn. Returns the first that is actually present, so a site that
  * only partially changed keeps working.
+ *
+ * `scope` is normally the page, but the cart steps resolve inside a single
+ * product card so they take that card as the scope. Ordered candidates are kept
+ * deliberately rather than joined into one "any of" selector: the first entry
+ * is the one verified against the live site, and a comma-joined selector would
+ * silently prefer whichever one the engine happened to match first.
  */
-export async function pick(page, platform, step, builtins, waitMs = 0) {
+export async function pick(scope, platform, step, builtins, waitMs = 0) {
     const override = loadFlows(platform)[step]?.trim();
     const candidates = override ? [override, ...builtins.filter(s => s !== override)] : builtins;
     for (const selector of candidates) {
-        const locator = page.locator(selector).first();
+        const locator = scope.locator(selector).first();
         // waitMs > 0 is for elements that render after a click (a login panel, a
         // sheet); without it a one-shot count gives up before they appear.
         const ok = waitMs
@@ -258,6 +269,76 @@ const INTENTS = {
         },
         blocker: 'No control on the page opens a login form. The session may already be signed in, or the trigger is behind a sheet that has to be dismissed first.',
     },
+    addToCart: {
+        scope: 'button, [role="button"]',
+        score: f => {
+            let s = 0;
+            const sig = `${f.ariaLabel} ${f.name} ${f.testIds.join(' ')}`;
+            if (has(f.text, /^\s*add\b/i))
+                s += 50;
+            if (has(sig, /add[\s_-]*(to[\s_-]*cart)?|buttonpair-add/i))
+                s += 40;
+            if (has(sig, /btn[\s_-]*add|cta/i))
+                s += 10;
+            if (f.visible)
+                s += 10;
+            // A quantity control is a different control, not a broken add button.
+            if (has(`${sig} ${f.text}`, /increase|decrement|quantity|\bcount\b|icon-plus|icon-minus/i))
+                s -= 60;
+            return Math.max(0, Math.min(100, s));
+        },
+        // Deliberately read-only, unlike every other oracle here. The others prove
+        // a step by performing it and reading the result back; performing *this*
+        // step mutates the cart, so a probe that guessed wrong would leave a real,
+        // unwanted item behind - which is a far worse outcome than an unfixed
+        // selector. So this proves the selector is safe to adopt and leaves it alone.
+        oracle: async (page, _loc, _el, selector) => {
+            try {
+                // Resolution goes through Playwright, not document.querySelectorAll:
+                // the selectors being judged include Playwright extensions such as
+                // `:has-text("ADD")`, which the browser's own CSS engine rejects. The
+                // DOM is used only for per-element facts.
+                const matches = page.locator(selector);
+                if ((await matches.count().catch(() => 0)) === 0)
+                    return false;
+                const seen = await matches
+                    .evaluateAll(els => {
+                    const CARD = '[data-testid*="product" i], [class*="card" i], [class*="Card"], article, li';
+                    const cards = [...document.querySelectorAll(CARD)];
+                    return els.map(el => {
+                        const r = el.getBoundingClientRect();
+                        const card = el.closest(CARD);
+                        return {
+                            visible: r.width > 0 && r.height > 0,
+                            card: card ? cards.indexOf(card) : -1,
+                        };
+                    });
+                })
+                    .catch(() => null);
+                if (!seen)
+                    return false;
+                // Every match must sit inside a product card, so the selector can never
+                // resolve to a header, cart-bar or footer control.
+                if (seen.some(s => s.card < 0))
+                    return false;
+                // And exactly one match per card. This selector is only ever used scoped
+                // to a single card, so "one match on the whole page" is the wrong test -
+                // a results page legitimately has twenty. Two buttons answering to it
+                // *within one card* is the ambiguity that actually matters.
+                const perCard = new Map();
+                for (const s of seen) {
+                    if (!s.visible)
+                        continue; // a hidden control proves nothing
+                    perCard.set(s.card, (perCard.get(s.card) ?? 0) + 1);
+                }
+                return perCard.size > 0 && [...perCard.values()].every(n => n === 1);
+            }
+            catch {
+                return false;
+            }
+        },
+        blocker: 'No button on this page could be proven to be an add-to-cart control. Either no product cards are on screen (search first, or add a prepareForStep for this step), the control is hidden or covered, or the site has changed shape enough that no selector can be trusted. Nothing was changed - inspect with diagnose_flow rather than guessing.',
+    },
 };
 /**
  * Try to repair `step` on its own. Returns the adopted selector on success, or a
@@ -272,8 +353,21 @@ export async function selfRepair(page, platform, step, builtins) {
     const ranked = candidates
         .filter(c => intent.score(c) > 0)
         .sort((a, b) => intent.score(b) - intent.score(a));
+    // The built-ins go first, ahead of anything derived from the page. They are
+    // the selectors verified against the live site, so if one still satisfies the
+    // intent it is the safest thing to adopt - and proving it costs nothing. A
+    // selector inferred from today's markup is a guess; a built-in is a record of
+    // a day when it was correct.
+    // Each entry carries the element facts it was derived from, when it was
+    // derived from one. A built-in has no candidate of its own, so passing an
+    // unrelated element's facts to its oracle would be a guess dressed up as data.
+    const queue = builtins.map(selector => ({ selector }));
     for (const cand of ranked.slice(0, 12)) {
         const selector = cssFor(cand);
+        if (!queue.some(q => q.selector === selector))
+            queue.push({ selector, el: cand });
+    }
+    for (const { selector, el } of queue) {
         // Everything gets probed, including the built-in: "it matched nothing" and
         // "it matched but the step failed against it" are different failures and the
         // rejected list is how the caller tells them apart.
@@ -286,7 +380,7 @@ export async function selfRepair(page, platform, step, builtins) {
         const loc = page.locator(selector).first();
         let ok = false;
         try {
-            ok = await intent.oracle(page, loc, cand);
+            ok = await intent.oracle(page, loc, el, selector);
         }
         catch {
             ok = false;

@@ -4,6 +4,7 @@
  */
 import { BrowserContext, Locator } from 'playwright';
 import { LoginStatus, QuickCommercePlatform, SearchResult, CartSummary, OrderPreview } from './base.js';
+import type { AddOutcome } from '../engine/add-strategy.js';
 /** Bill rows look like "Items total Saved ₹2 ₹195 ₹193" or "Handling charge ₹12": last ₹ amount is what's charged. */
 export declare function parseBill(rows: string[]): {
     subtotal: number;
@@ -47,7 +48,7 @@ export declare class BlinkitPlatform extends QuickCommercePlatform {
     search(query: string): Promise<SearchResult>;
     private extractProductResults;
     private extractQuantity;
-    addToCart(productId: string, quantity: number): Promise<boolean>;
+    addToCart(productId: string, quantity: number): Promise<AddOutcome>;
     private openCart;
     getCart(): Promise<CartSummary | null>;
     private extractCartItems;

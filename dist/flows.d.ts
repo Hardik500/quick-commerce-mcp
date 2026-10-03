@@ -2,7 +2,7 @@ import { Page } from 'playwright';
 import type { Locator } from 'playwright';
 export type FlowOverrides = Record<string, string>;
 /** Steps an override may replace. Anything else is rejected. */
-export declare const FLOW_STEPS: readonly ["loginTrigger", "phoneInput", "otpInput", "otpSubmit", "locationModal", "locationSearch", "locationSuggestion", "productCard", "productName", "productPrice", "cartItem", "addToCart"];
+export declare const FLOW_STEPS: readonly ["loginTrigger", "phoneInput", "otpInput", "otpSubmit", "locationModal", "locationSearch", "locationSuggestion", "productCard", "productName", "productPrice", "cartItem", "addToCart", "cartLanded", "cartIncrement"];
 export type FlowStep = (typeof FLOW_STEPS)[number];
 export declare function loadFlows(platform: string): FlowOverrides;
 /** Persist one step's selector. Rejects unknown steps and empty selectors. */
@@ -18,8 +18,14 @@ export declare function selectorFor(platform: string, step: string, builtin: str
  * Resolve a step to a locator, trying the override first and then each built-in
  * candidate in turn. Returns the first that is actually present, so a site that
  * only partially changed keeps working.
+ *
+ * `scope` is normally the page, but the cart steps resolve inside a single
+ * product card so they take that card as the scope. Ordered candidates are kept
+ * deliberately rather than joined into one "any of" selector: the first entry
+ * is the one verified against the live site, and a comma-joined selector would
+ * silently prefer whichever one the engine happened to match first.
  */
-export declare function pick(page: Page, platform: string, step: string, builtins: string[], waitMs?: number): Promise<{
+export declare function pick(scope: Page | Locator, platform: string, step: string, builtins: string[], waitMs?: number): Promise<{
     locator: Locator;
     used: string;
 } | null>;

@@ -7,6 +7,8 @@ import { parseInstamartBill } from './platforms/swiggy-instamart.js';
 import type { Product } from './platforms/base.js';
 import { singleFlight } from './single-flight.js';
 import { keyedLock } from './keyed-lock.js';
+import { ADD_RUNGS, blockedBy, nextAddAction, type CardProbe } from './engine/add-strategy.js';
+import { FLOW_STEPS } from './flows.js';
 
 const prod = (o: Partial<Product>): Product =>
   ({ id: '1', name: 'Amul Milk', price: 30, quantity: '500 ml', inStock: true, platform: 'blinkit', ...o });
@@ -295,4 +297,226 @@ test("storeNotice: detects closed/unserviceable banners, ignores normal carts", 
   assert.match(storeNotice("To Pay\nThis Instamart store is currently unserviceable\nRetry")!, /unserviceable/);
   assert.match(storeNotice("Sorry, store closed for the night")!, /closed/);
   assert.equal(storeNotice("To Pay\n₹138\nProceed to Pay"), undefined);
+});
+
+/* ---------------------------------------------------------------------------
+ * add-to-cart ladder
+ * ------------------------------------------------------------------------- */
+
+const probe = (o: Partial<CardProbe> = {}): CardProbe => ({
+  landed: false,
+  addPresent: true,
+  addVisible: true,
+  rung: 0,
+  scrolled: false,
+  waitedForAttach: false,
+  ...o,
+});
+
+test("addToCart: a card already showing a stepper is never clicked again", () => {
+  // The double-add bug. Landing outranks everything, including a visible ADD
+  // control, so re-running add on an item already in the cart cannot top it up
+  // to two.
+  assert.deepEqual(nextAddAction(probe({ landed: true })), { kind: 'already' });
+  assert.deepEqual(nextAddAction(probe({ landed: true, rung: 2, addPresent: false })), { kind: 'already' });
+});
+
+test("addToCart: a card with no control gets one bounded wait before it is called absent", () => {
+  // Virtualised result lists render cards late; giving up on the first miss is
+  // how a real product gets reported as unfindable.
+  assert.deepEqual(nextAddAction(probe({ addPresent: false })), { kind: 'wait-attach' });
+  assert.deepEqual(nextAddAction(probe({ addPresent: false, waitedForAttach: true })), { kind: 'absent' });
+});
+
+test("addToCart: a control that is present but off screen is scrolled before any click budget is spent", () => {
+  assert.deepEqual(nextAddAction(probe({ addVisible: false })), { kind: 'scroll' });
+  // Scrolling did not help, so it stops being retried and the ladder proceeds.
+  assert.equal(nextAddAction(probe({ addVisible: false, scrolled: true })).kind, 'click');
+});
+
+test("addToCart: the click escalates and only the last rung skips actionability checks", () => {
+  // force:true dispatches at the element's coordinates regardless of what the
+  // site says about visibility. That is occasionally the only thing that gets
+  // through, and it is also the rung most able to click the wrong thing, so it
+  // has to be last - and there is no third rung, because a second identical
+  // normal click was measured adding ~8s to a blocked card without helping.
+  assert.deepEqual(ADD_RUNGS.map(r => r.force), [false, true]);
+  assert.deepEqual(nextAddAction(probe({ rung: 0 })), { kind: 'click', ...ADD_RUNGS[0] });
+  assert.deepEqual(nextAddAction(probe({ rung: 1 })), { kind: 'click', ...ADD_RUNGS[1] });
+  assert.deepEqual(nextAddAction(probe({ rung: ADD_RUNGS.length })), { kind: 'failed' });
+});
+
+test("addToCart: the whole ladder is bounded well under the 30s cliff it replaces", () => {
+  // Regression guard for the reported failure: one click inheriting Playwright's
+  // 30s default, repeated per item, is how a three-item cart took 110s and
+  // added nothing. Every rung must now either recover the click or prove the
+  // item landed, and the total must stay a small fraction of one old timeout.
+  const worstCaseMs = ADD_RUNGS.reduce((n, r) => n + r.timeout, 0);
+  assert.ok(worstCaseMs < 15000, `ladder click budget ${worstCaseMs}ms should stay well under one 30s timeout`);
+
+  // Drive it the way addViaCard does, against a card whose control exists but
+  // never becomes clickable, and confirm it terminates on a verdict rather
+  // than looping.
+  let rung = 0;
+  let scrolled = false;
+  let waitedForAttach = false;
+  const clicks: string[] = [];
+  let verdict = '';
+  for (let i = 0; i < 8 && !verdict; i++) {
+    const a = nextAddAction(probe({ addVisible: false, rung, scrolled, waitedForAttach }));
+    if (a.kind === 'click') {
+      clicks.push(String(a.force));
+      rung++; // click did not take
+    } else if (a.kind === 'scroll') {
+      scrolled = true;
+    } else if (a.kind === 'wait-attach') {
+      waitedForAttach = true;
+    } else {
+      verdict = a.kind;
+    }
+  }
+  assert.equal(verdict, 'failed');
+  // Recovered visibility first, then spent every rung exactly once.
+  assert.deepEqual(clicks, ['false', 'true']);
+});
+
+test("flow steps: the cart selectors are overridable without a release", () => {
+  // The add button, the proof that an add landed, and the increment control
+  // all break when a site redeploys. Each needs an override, or the only fix is
+  // a code change and an npm release.
+  for (const step of ['addToCart', 'cartLanded', 'cartIncrement']) {
+    assert.ok((FLOW_STEPS as readonly string[]).includes(step), `${step} must be an overridable flow step`);
+  }
+});
+
+/* ---------------------------------------------------------------------------
+ * addViaCard: the ladder driven against a fake card
+ * ------------------------------------------------------------------------- */
+
+const LANDED = '[data-testid="landed"]';
+const ADD = 'button:has-text("ADD")';
+const INC = 'button[aria-label="inc"]';
+const SPEC = { landed: [LANDED], add: [ADD], increment: [INC] } as const;
+
+/**
+ * A card that can be told to hide its control, refuse clicks for a while, or
+ * fail to register an add - the three ways this really goes wrong. Records what
+ * the ladder did, so the test asserts on behaviour and not on call counts.
+ */
+function fakeCard(init: {
+  landed?: boolean;
+  addPresent?: boolean;
+  addVisible?: boolean;
+  /** Clicks to absorb before one succeeds. Infinity = never. */
+  stubbornClicks?: number;
+  /** Landed appears only if a click is accepted. */
+  landOnAcceptedClick?: boolean;
+  visibleAfterScroll?: boolean;
+}) {
+  const st = {
+    landed: init.landed ?? false,
+    addPresent: init.addPresent ?? true,
+    addVisible: init.addVisible ?? true,
+    stubborn: init.stubbornClicks ?? 0,
+    clicks: 0,
+    scrolls: 0,
+  };
+  const log: string[] = [];
+  const exists = (sel: string) =>
+    sel === LANDED ? st.landed : sel === ADD ? st.addPresent : true;
+
+  const el = (sel: string) => ({
+    count: async () => (exists(sel) ? 1 : 0),
+    isVisible: async () => (sel === LANDED ? st.landed : sel === ADD ? st.addVisible : true),
+    waitFor: async () => {
+      if (exists(sel)) return;
+      throw new Error('not attached');
+    },
+    scrollIntoViewIfNeeded: async () => {
+      log.push('scroll');
+      st.scrolls++;
+      st.addVisible = init.visibleAfterScroll ?? true;
+    },
+    click: async (o: { force?: boolean } = {}) => {
+      log.push(o.force ? 'click:force' : 'click');
+      st.clicks++;
+      if (st.clicks <= st.stubborn) throw new Error('element is not visible');
+      if (init.landOnAcceptedClick) st.landed = true;
+    },
+    // Real blocker read: what is at the control's centre point. The fake page
+    // has no overlays, so this reports "nothing in the way" unless told otherwise.
+    evaluate: async (fn: (el: unknown) => unknown) =>
+      fn({
+        getBoundingClientRect: () => ({ width: 100, height: 40, left: 10, top: 10 }),
+        contains: () => false,
+      }),
+  });
+
+  const card = { locator: (sel: string) => ({ first: () => el(sel) }) };
+  return { card: card as any, log, st };
+}
+
+/** addViaCard is protected; reach it the way the other tests reach protected members. */
+const ladder = (card: any, quantity = 1) => (new BlinkitPlatform() as any).addViaCard(card, SPEC, quantity);
+
+test("addViaCard: a normal card is added on the first click", async () => {
+  const { card, log } = fakeCard({ landOnAcceptedClick: true });
+  assert.equal(await ladder(card), 'added');
+  assert.deepEqual(log, ['click']);
+});
+
+test("addViaCard: an item already in the cart is reported, not clicked again", async () => {
+  const { card, log, st } = fakeCard({ landed: true });
+  assert.equal(await ladder(card), 'already');
+  assert.deepEqual(log, [], 'must not touch a card that already shows a stepper');
+  assert.equal(st.clicks, 0);
+});
+
+test("addViaCard: an off-screen control is scrolled into view before any click", async () => {
+  const { card, log } = fakeCard({ addVisible: false, landOnAcceptedClick: true });
+  assert.equal(await ladder(card), 'added');
+  assert.deepEqual(log, ['scroll', 'click']);
+});
+
+test("addViaCard: a control that stays hidden is clicked with force only after the normal rung fails", async () => {
+  const { card, log } = fakeCard({ addVisible: false, visibleAfterScroll: false, stubbornClicks: Infinity });
+  assert.equal(await ladder(card), 'failed');
+  assert.deepEqual(log, ['scroll', 'click', 'click:force']);
+});
+
+test("addViaCard: a click that reports success but changes nothing is not reported as an add", async () => {
+  // The click resolves; the stepper never appears. Reporting success here is
+  // how a caller ends up verifying a cart that was never touched.
+  const { card, log } = fakeCard({}); // no landOnAcceptedClick: nothing ever lands
+  assert.equal(await ladder(card), 'failed');
+  assert.equal(log.filter(l => l.startsWith('click')).length, ADD_RUNGS.length);
+});
+
+test("addViaCard: a card with no control at all is 'absent', so the caller can stop the batch", async () => {
+  const { card, log } = fakeCard({ addPresent: false });
+  assert.equal(await ladder(card), 'absent');
+  assert.deepEqual(log, [], 'never spends a click budget on a control that is not there');
+});
+
+test("addViaCard: quantity is topped up after the add lands, but never on a landed card", async () => {
+  const three = fakeCard({ landOnAcceptedClick: true });
+  assert.equal(await ladder(three.card, 3), 'added');
+  // One ADD plus two increments, each press re-resolving the stepper.
+  assert.equal(three.st.clicks, 3);
+
+  const landed = fakeCard({ landed: true });
+  assert.equal(await ladder(landed.card, 3), 'already');
+  assert.equal(landed.st.clicks, 0, 'a landed card is never topped up either');
+});
+
+test("blockedBy: reports what covers the control, and never throws", async () => {
+  const covers = (tag: string) => ({ evaluate: async () => `${tag} is covering it` });
+  assert.equal(await blockedBy(covers('div#cookie-banner') as any), 'div#cookie-banner is covering it');
+  // Nothing in the way: null, so the caller reports a plain failure rather than
+  // inventing a cause.
+  assert.equal(await blockedBy({ evaluate: async () => null } as any), null);
+  // A locator that cannot answer must degrade to null. This runs on the failure
+  // path of a failed add, where throwing would replace a diagnosis with a crash.
+  assert.equal(await blockedBy({} as any), null);
+  assert.equal(await blockedBy({ evaluate: async () => { throw new Error('detached'); } } as any), null);
 });

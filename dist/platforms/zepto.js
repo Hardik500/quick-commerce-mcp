@@ -252,11 +252,24 @@ export class ZeptoPlatform extends QuickCommercePlatform {
      * field on it at all.
      */
     async prepareForStep(step) {
-        if (!/phoneInput|loginTrigger/.test(step))
-            return;
         const page = this.page;
         if (!page)
             throw new Error('Platform not initialized');
+        // addToCart has no panel to open, but it does need product cards on screen:
+        // the oracle inspects them, so inspecting an empty homepage would "prove"
+        // that no add control exists anywhere and adopt nothing. The homepage
+        // carries cards, so land there and let them render.
+        if (step === 'addToCart') {
+            await page.goto(this.baseUrl, { waitUntil: 'domcontentloaded', timeout: 45000 });
+            await page
+                .locator(this.selectors.searchResults)
+                .first()
+                .waitFor({ state: 'attached', timeout: 15000 })
+                .catch(() => { });
+            return;
+        }
+        if (!/phoneInput|loginTrigger/.test(step))
+            return;
         await page.goto(this.baseUrl, { waitUntil: 'domcontentloaded', timeout: 45000 });
         const tel = page
             .locator(selectorFor(this.name, 'phoneInput', 'input[type="tel"][placeholder*="Phone" i]'))
@@ -432,33 +445,30 @@ export class ZeptoPlatform extends QuickCommercePlatform {
         try {
             // Product cards all share data-testid="product-card"; find the one
             // whose href contains the pvid we extracted during search.
-            const product = await this.page.$(`${this.selectors.searchResults}[href*="/pvid/${productId}"]`);
-            if (!product) {
+            // A Locator rather than an ElementHandle: search results re-render, and a
+            // handle taken now can be detached by the time it is clicked, which is
+            // what used to surface as 30s of "element is not visible".
+            const card = this.page.locator(`${this.selectors.searchResults}[href*="/pvid/${productId}"]`).first();
+            if ((await card.count().catch(() => 0)) === 0) {
                 console.log('Product not found:', productId);
-                return false;
+                return 'absent';
             }
-            const addButton = await product.$(this.selectors.addToCartButton);
-            if (!addButton) {
-                console.log('Add to cart button not found');
-                return false;
+            // The ADD button turns into a stepper once the item is in the cart, and
+            // both halves of that stepper are equally good proof it landed - which is
+            // what lets one survive a rename of the other.
+            const outcome = await this.addViaCard(card, {
+                add: [this.selectors.addToCartButton],
+                landed: [this.selectors.incrementButton, this.selectors.decrementButton],
+                increment: [this.selectors.incrementButton],
+            }, quantity);
+            if (outcome !== 'added' && outcome !== 'already') {
+                console.log(`Add to cart did not complete (${outcome}):`, productId);
             }
-            await this.afterChange(() => addButton.click());
-            // The ADD button turns into a stepper once the item is in the cart.
-            const stepper = await product.waitForSelector(this.selectors.incrementButton, { timeout: 5000 }).catch(() => null);
-            if (!stepper) {
-                console.log('Item did not land in cart:', productId);
-                return false;
-            }
-            for (let i = 1; i < quantity; i++) {
-                const incrementButton = await product.waitForSelector(this.selectors.incrementButton, { timeout: 5000 }).catch(() => null);
-                if (incrementButton)
-                    await this.afterChange(() => incrementButton.click());
-            }
-            return true;
+            return outcome;
         }
         catch (error) {
             console.error('Error adding to cart:', error);
-            return false;
+            return 'failed';
         }
     }
     async openCart() {

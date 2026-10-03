@@ -4,6 +4,7 @@
  */
 import { BrowserContext, Locator } from 'playwright';
 import { LoginStatus, QuickCommercePlatform, SearchResult, CartSummary, OrderPreview } from './base.js';
+import type { AddOutcome } from '../engine/add-strategy.js';
 /**
  * Instamart bill is one text line per cell: label, then "struck original, actual" or a single amount or "FREE"
  * (e.g. "Handling Fee","₹12.83","₹12.00" / "Delivery Partner Fee","₹30.00","FREE"). Last amount is what's charged.
@@ -45,7 +46,7 @@ export declare class SwiggyInstamartPlatform extends QuickCommercePlatform {
     search(query: string): Promise<SearchResult>;
     private extractProductResults;
     private extractQuantity;
-    addToCart(productId: string, quantity: number): Promise<boolean>;
+    addToCart(productId: string, quantity: number): Promise<AddOutcome>;
     /** Click through a located product card to put `quantity` in the cart. */
     private addFromCard;
     getCart(): Promise<CartSummary | null>;

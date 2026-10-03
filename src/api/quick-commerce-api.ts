@@ -247,7 +247,7 @@ export class HybridQuickCommerceClient {
     this.apiClient = new ZeptoAPIClient();
   }
 
-  async search(query: string, location?: string) {
+  async search(query: string, _location?: string) {
     // Try browser first (if stealth works)
     if (this.mode === 'browser') {
       // ... browser logic

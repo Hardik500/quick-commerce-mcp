@@ -33,9 +33,6 @@ export class ResilientSelectorEngine {
 
     const candidates: SelectorResult[] = [];
 
-    // Get page context for AI analysis
-    const pageContext = await this.getPageContext();
-
     // Strategy: Look for semantic attributes and roles
     const semanticSelectors = await this.findSemanticElements(purpose);
     candidates.push(...semanticSelectors);

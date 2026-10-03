@@ -1,9 +1,18 @@
+import { pick } from '../flows.js';
+import { blockedBy, nextAddAction } from '../engine/add-strategy.js';
 export class QuickCommercePlatform {
     name;
     baseUrl;
     context = null;
     page = null;
     isLoggedIn = false;
+    /**
+     * Why the last add failed, when the cause is something other than a missing
+     * button - e.g. "div#cookie-banner ... is covering it". Null when the add
+     * worked, or when it failed for want of a control. Read it immediately after
+     * `addToCart` returns 'failed'; it is overwritten by the next attempt.
+     */
+    lastAddBlocker = null;
     /**
      * Whether `isLoggedIn` reflects a check this instance actually performed.
      *
@@ -100,6 +109,123 @@ export class QuickCommercePlatform {
         await page
             .waitForFunction((b) => document.body.innerText !== b, before, { timeout })
             .catch(() => { });
+    }
+    /**
+     * Put `quantity` of the product on `card` into the cart, and prove it.
+     *
+     * This is the one operation every platform does the same way, and it is the
+     * one that used to be slowest: a single hardcoded add-button selector, and a
+     * click with no timeout of its own, so Playwright's 30s default applied and
+     * "element is not visible" was spent in full before giving up. With a
+     * multi-item cart that is 30s per item and no items added.
+     *
+     * Instead the click is bounded and escalated, and the outcome is a classified
+     * fact rather than a boolean. Each selector is resolved through the flow
+     * layer, so a `diagnose_flow` override for `addToCart`, `cartLanded` or
+     * `cartIncrement` takes effect here with no code change and no release.
+     *
+     * Waiting is fine; waiting to no purpose is not. Every rung either recovers
+     * the click or proves the item is in the cart, and the whole ladder is
+     * bounded by ADD_RUNGS.
+     */
+    async addViaCard(card, spec, quantity = 1) {
+        let rung = 0;
+        let scrolled = false;
+        let waitedForAttach = false;
+        // The most recently resolved add control, kept so the failure path can ask
+        // what was covering it after the loop has gone out of scope.
+        let lastAdd = null;
+        // Set only when the ladder ran out of rungs, so the caller can be told what
+        // was actually in the way rather than just that it failed.
+        this.lastAddBlocker = null;
+        // Bounded by construction: every branch either returns or advances the
+        // ladder, and the ladder is finite. The step cap is a backstop, not the
+        // mechanism that terminates.
+        for (let step = 0; step < 8; step++) {
+            const landed = await pick(card, this.name, 'cartLanded', [...spec.landed]);
+            const add = await pick(card, this.name, 'addToCart', [...spec.add]);
+            if (add)
+                lastAdd = add.locator;
+            const landedVisible = landed ? await landed.locator.isVisible().catch(() => false) : false;
+            const addVisible = add ? await add.locator.isVisible().catch(() => false) : false;
+            const action = nextAddAction({ landed: landedVisible, addPresent: !!add, addVisible, rung, scrolled, waitedForAttach });
+            switch (action.kind) {
+                case 'already':
+                    return 'already';
+                case 'absent':
+                    return 'absent';
+                case 'failed':
+                    // Out of rungs with the item still not in the cart. Say what is in
+                    // the way, because "could not be clicked" is not something a caller
+                    // can act on while "a cookie banner is covering it" is. One bounded
+                    // DOM read, on the failure path only.
+                    if (lastAdd)
+                        this.lastAddBlocker = await blockedBy(lastAdd);
+                    return 'failed';
+                case 'wait-attach':
+                    // A virtualised results list renders cards after the query settles.
+                    waitedForAttach = true;
+                    await pick(card, this.name, 'addToCart', [...spec.add], 4000);
+                    break;
+                case 'scroll':
+                    // Cheapest possible fix for the most common cause: a control that
+                    // exists but sits outside the mobile viewport.
+                    scrolled = true;
+                    await add?.locator.scrollIntoViewIfNeeded({ timeout: 4000 }).catch(() => { });
+                    break;
+                case 'click': {
+                    if (!add)
+                        return 'absent';
+                    const clicked = await add.locator.click({ timeout: action.timeout, force: action.force }).then(() => true, () => false);
+                    if (!clicked) {
+                        rung++;
+                        break;
+                    }
+                    // A click that reported success but changed nothing is the same
+                    // failure as one that threw. Report an add only once the card proves
+                    // it, otherwise the caller verifies a cart that was never touched.
+                    if (spec.between && (await spec.between(card)))
+                        return 'added';
+                    const proof = await pick(card, this.name, 'cartLanded', [...spec.landed], 5000);
+                    if (!proof || !(await proof.locator.isVisible().catch(() => false))) {
+                        rung++;
+                        break;
+                    }
+                    await this.topUp(card, spec.increment, quantity);
+                    return 'added';
+                }
+            }
+        }
+        return 'failed';
+    }
+    /**
+     * Raise an already-added item to `quantity`, one press at a time. The stepper
+     * is re-resolved before every press because it re-renders on each one, so a
+     * handle taken once would go stale and the second press would land nowhere.
+     *
+     * The short press budget is deliberate: reaching here means the stepper was
+     * just observed on the card, so it is present and interactive, and a press
+     * that cannot land in 3s is not going to land in 30. Without that bound a
+     * broken stepper would cost 10s per remaining unit - the same trap as the
+     * click this replaced, one level down.
+     *
+     * A press that cannot be completed leaves the single unit in the cart and
+     * stops. The caller reports the shortfall from the cart read-back, which
+     * re-counts what is actually there rather than trusting the click.
+     */
+    async topUp(card, increment, quantity) {
+        for (let i = 1; i < quantity; i++) {
+            const press = async () => {
+                const plus = await pick(card, this.name, 'cartIncrement', [...increment]);
+                if (!plus)
+                    return false;
+                return plus.locator.click({ timeout: 3000 }).then(() => true, () => false);
+            };
+            if (!(await press()) && !(await press()))
+                return;
+            // Let the counter settle before the next press.
+            await this.page?.waitForTimeout(300).catch(() => { });
+        }
     }
     /**
      * Select delivery address by id from getAddresses().

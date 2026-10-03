@@ -81,6 +81,12 @@ export declare abstract class QuickCommercePlatform {
     protected context: BrowserContext | null;
     protected page: Page | null;
     protected isLoggedIn: boolean;
+    private productQueries;
+    /** Keep IDs usable after cart/address reads navigate away from search. */
+    protected rememberSearch(query: string, products: Product[]): void;
+    /** The name needed to validate ID-only requests against name-based cart rows. */
+    getProductName(productId: string): string | undefined;
+    protected restoreProductSearch(productId: string): Promise<void>;
     /**
      * Why the last add failed, when the cause is something other than a missing
      * button - e.g. "div#cookie-banner ... is covering it". Null when the add

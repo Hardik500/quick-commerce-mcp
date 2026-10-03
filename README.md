@@ -73,6 +73,8 @@ Sessions are saved to `~/.quick-commerce-mcp/sessions/` and expire eventually; j
 
 **From source:** `npm install && npm run build`, then point the client at `node /path/to/dist/index.js`.
 
+**Tests:** install the test browser with `npx playwright install chromium`, then run `npm test` and `npm run lint`. To use an existing Chromium executable, set `QC_CHROME_PATH` when running the tests. The browser regression tests use local fixture storefronts; they do not use saved sessions or make live purchases.
+
 ## 🛠️ Supported Platforms
 
 | Platform | Search | Cart | Order | Notes |

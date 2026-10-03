@@ -1,4 +1,6 @@
 import type { Product } from './platforms/base.js';
+/** Search labels append pack sizes, sometimes nested: "Milk (1 pack (500 ml))". */
+export declare function stripPackSize(name: string): string;
 export declare function unitPrice(p: Product): {
     value: number;
     label: string;

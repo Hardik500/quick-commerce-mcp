@@ -1,5 +1,17 @@
 import type { Product } from './platforms/base.js';
 
+/** Search labels append pack sizes, sometimes nested: "Milk (1 pack (500 ml))". */
+export function stripPackSize(name: string): string {
+  const text = name.trim();
+  if (!text.endsWith(')')) return text;
+  let depth = 0;
+  for (let i = text.length - 1; i >= 0; i--) {
+    if (text[i] === ')') depth++;
+    if (text[i] === '(' && --depth === 0) return text.slice(0, i).trim();
+  }
+  return text;
+}
+
 // Price per 100 ml/g (or per piece) so different pack sizes compare fairly.
 // ponytail: handles "450 ml", "1 L", "2 x 500 g", "6 pcs"; anything else is
 // ranked by raw price.
@@ -78,9 +90,8 @@ export function validateCart(
   // name without a trailing parenthesised pack size, or a correctly-added item
   // reads as missing.
   const norm = (s: string) =>
-    s
+    stripPackSize(s)
       .toLowerCase()
-      .replace(/\s*\([^)]*\)\s*$/, '')
       .replace(/\s+/g, ' ')
       .trim();
   const missing: string[] = [], wrongQty: string[] = [];

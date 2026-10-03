@@ -66,13 +66,15 @@ export type AddAction =
  * - 'not-found'          - this product's card is not on the page. A fact about
  *   one item (it may be out of stock, or its search may not have surfaced it), so
  *   the caller reports it and carries on with the rest of the list.
+ * - 'unavailable'        - this card explicitly reports out of stock. Also a
+ *   per-item failure; the remaining products must still be attempted.
  * - 'absent'             - the card IS on the page but offers no add control at
  *   all. A fact about the page, not the item, so the caller stops rather than
  *   repeating a lookup that cannot succeed.
  * - 'failed'             - a control was there and the click did not take. About
  *   this card, so the caller carries on.
  */
-export type AddOutcome = 'added' | 'already' | 'not-found' | 'absent' | 'failed';
+export type AddOutcome = 'added' | 'already' | 'not-found' | 'unavailable' | 'absent' | 'failed';
 /**
  * Click attempts in order. The first covers the ordinary case, including a
  * control that is slow to become stable - Playwright spends that budget
@@ -90,6 +92,23 @@ export type AddOutcome = 'added' | 'already' | 'not-found' | 'absent' | 'failed'
  * forced one have both failed, the control is not merely slow, and `blockedBy`
  * below is what turns that into something the caller can act on instead of a
  * bare failure.
+ */
+/**
+ * Click attempts in order, and what each is for.
+ *
+ * Only ever used while a click has NOT been dispatched. Once Playwright accepts
+ * a click the site may already have added the item, and clicking again is a
+ * duplicate rather than a retry - which is how asking for 3 of something put 5
+ * in a real cart on a store whose quantity counter never renders. A rung that
+ * throws has provably sent nothing, so escalating is safe; that distinction is
+ * the whole reason this is a short list.
+ *
+ * The budgets are not "how long to wait for a slow site" - they are "how long
+ * to wait before trying something different". The second drops actionability
+ * checks, the only thing that gets a click through a control the site insists
+ * is hidden. Nothing further is worth waiting for: by then the page is not in
+ * the state the caller asked for, and blockedBy below turns that into something
+ * actionable.
  */
 export declare const ADD_RUNGS: readonly [{
     readonly timeout: 5000;

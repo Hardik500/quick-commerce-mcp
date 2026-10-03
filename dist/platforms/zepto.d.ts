@@ -57,6 +57,7 @@ export declare class ZeptoPlatform extends QuickCommercePlatform {
     private lastPrice;
     getCart(): Promise<CartSummary | null>;
     private extractCartItems;
+    private decrementCartRow;
     removeFromCart(productId: string): Promise<boolean>;
     clearCart(): Promise<boolean>;
     protected openAddressPicker(): Promise<Locator>;

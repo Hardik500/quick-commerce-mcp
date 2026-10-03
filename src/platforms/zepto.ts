@@ -20,7 +20,7 @@ import {
 } from './base.js';
 import { sessionPath, ensureSessionDir, saveQrImage, openQrViewer, QR_OPTS } from '../session-helper.js';
 import { wantsQrViewer } from '../preferences.js';
-import { storeNotice } from '../ranking.js';
+import { storeNotice, stripPackSize } from '../ranking.js';
 import { selectorFor } from '../flows.js';
 import type { AddOutcome } from '../engine/add-strategy.js';
 
@@ -422,6 +422,7 @@ export class ZeptoPlatform extends QuickCommercePlatform {
 
       // Extract products
       const products = await this.extractProductResults();
+      this.rememberSearch(query, products);
 
       return {
         query,
@@ -478,7 +479,7 @@ export class ZeptoPlatform extends QuickCommercePlatform {
             mrp,
             quantity: await this.extractCardQuantity(element, name),
             platform: this.name,
-            inStock: true, // Assume in stock if visible
+            inStock: !(await element.$('[data-testid="out-of-stock"], :text-matches("out of stock|sold out|unavailable", "i")')),
           });
         } catch {
           // Skip products that fail extraction
@@ -514,12 +515,14 @@ export class ZeptoPlatform extends QuickCommercePlatform {
       // handle taken now can be detached by the time it is clicked, which is
       // what used to surface as 30s of "element is not visible".
       const card = this.page.locator(`${this.selectors.searchResults}[href*="/pvid/${productId}"]`).first();
+      if ((await card.count()) === 0) await this.restoreProductSearch(productId);
       if ((await card.count().catch(() => 0)) === 0) {
         // About this product, not about the page: the caller's other items are
         // still worth attempting.
         console.log('Product not found:', productId);
         return 'not-found';
       }
+      if (await card.getByText(/out of stock|sold out|unavailable/i).first().isVisible().catch(() => false)) return 'unavailable';
 
       // The ADD button turns into a stepper once the item is in the cart, and
       // both halves of that stepper are equally good proof it landed - which is
@@ -628,21 +631,50 @@ export class ZeptoPlatform extends QuickCommercePlatform {
     return items;
   }
 
+  private async decrementCartRow(row: Locator): Promise<void> {
+    const quantity = row.locator(this.selectors.cartItemQty);
+    const before = parseInt(await quantity.innerText({ timeout: 3000 }), 10);
+    const lastItem = before === 1 && (await this.page!.locator(this.selectors.cartItems).count()) === 1;
+    // The DOM updates optimistically, and unrelated page text can change while
+    // the quantity is still unchanged. Do not click again or navigate away
+    // until both the cart mutation and this row's decrement have completed.
+    const isMutation = (request: import('playwright').Request) =>
+      request.method() === 'PUT' && /\/api\/v\d+\/cart$/.test(new URL(request.url()).pathname);
+    let sent = false;
+    const track = (request: import('playwright').Request) => { if (isMutation(request)) sent = true; };
+    this.page!.on('request', track);
+    const committed = this.page!.waitForResponse(response => isMutation(response.request()),
+      { timeout: 10000 }).catch(() => null);
+    try {
+      await row.locator(this.selectors.cartItemMinus).click({ timeout: 3000 });
+      await quantity.filter({ hasText: new RegExp(`^\\s*${before}\\s*$`) })
+        .waitFor({ state: 'hidden', timeout: 5000 });
+      // Zepto clears its local basket without a PUT when the last unit goes.
+      // Earlier mutations must already have settled so they cannot restore it.
+      if (lastItem && !sent) return;
+      const response = await committed;
+      if (!response?.ok()) throw new Error('Zepto did not confirm the cart update');
+      const error = await response.finished();
+      if (error) throw error;
+    } finally { this.page!.off('request', track); }
+  }
+
   async removeFromCart(productId: string): Promise<boolean> {
     if (!this.page) throw new Error('Platform not initialized');
 
     try {
       await this.openCart();
       // Decrement until the row disappears.
+      const name = stripPackSize(productId);
       for (let i = 0; i < 50; i++) {
         const row = this.page
           .locator(this.selectors.cartItems)
-          .filter({ has: this.page.locator(this.selectors.cartItemName, { hasText: productId }) })
+          .filter({ has: this.page.locator(this.selectors.cartItemName, { hasText: name }) })
           .first();
         // First pass: the cart may still be rendering; wait for the row.
         if (i === 0) await row.waitFor({ timeout: 5000 }).catch(() => {});
         if ((await row.count()) === 0) return i > 0;
-        await this.afterChange(() => row.locator(this.selectors.cartItemMinus).click());
+        await this.decrementCartRow(row);
       }
       return false;
     } catch (error) {
@@ -657,9 +689,9 @@ export class ZeptoPlatform extends QuickCommercePlatform {
     try {
       await this.openCart();
       for (let i = 0; i < 100; i++) {
-        const minus = this.page.locator(`${this.selectors.cartItems} ${this.selectors.cartItemMinus}`).first();
-        if ((await minus.count()) === 0) return true;
-        await this.afterChange(() => minus.click());
+        const row = this.page.locator(this.selectors.cartItems).first();
+        if ((await row.count()) === 0) return true;
+        await this.decrementCartRow(row);
       }
       return false;
     } catch (error) {

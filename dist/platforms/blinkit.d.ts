@@ -49,7 +49,9 @@ export declare class BlinkitPlatform extends QuickCommercePlatform {
     private extractProductResults;
     private extractQuantity;
     addToCart(productId: string, quantity: number): Promise<AddOutcome>;
+    private cartNotice?;
     private openCart;
+    private dismissClosedStoreDialog;
     getCart(): Promise<CartSummary | null>;
     private extractCartItems;
     removeFromCart(productId: string): Promise<boolean>;

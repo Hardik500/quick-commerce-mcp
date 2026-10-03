@@ -427,12 +427,23 @@ test("addViaCard: a control that stays hidden is clicked with force only after t
     assert.equal(await ladder(card), 'failed');
     assert.deepEqual(log, ['scroll', 'click', 'click:force']);
 });
-test("addViaCard: a click that reports success but changes nothing is not reported as an add", async () => {
-    // The click resolves; the stepper never appears. Reporting success here is
-    // how a caller ends up verifying a cart that was never touched.
-    const { card, log } = fakeCard({}); // no landOnAcceptedClick: nothing ever lands
-    assert.equal(await ladder(card), 'failed');
-    assert.equal(log.filter(l => l.startsWith('click')).length, ADD_RUNGS.length);
+test("addViaCard: a dispatched click is never repeated, only unproven", async () => {
+    // Regression guard, and the most consequential rule in the ladder. The click
+    // resolves but the stepper never appears - which is exactly what a closed
+    // store does, since the quantity counter never renders. The old ladder read
+    // that as "the click did not take" and escalated, and every rung added
+    // another unit: asking for 3 put 5 in a real cart while reporting a failure.
+    //
+    // A dispatched click may already have been committed by the site, so there is
+    // no second click. Only a click Playwright refuses to send is safe to retry.
+    const { card, log, st } = fakeCard({}); // nothing ever lands
+    const p = new BlinkitPlatform();
+    assert.equal(await p.addViaCard(card, SPEC, 1), 'failed');
+    assert.equal(log.filter(l => l.startsWith('click')).length, 1, 'exactly one click, no matter how many rungs remain');
+    assert.equal(st.clicks, 1, 'the card was clicked once');
+    // And the caller is told the state is genuinely unknown, rather than being
+    // told it failed when the item may well be in the cart.
+    assert.match(p.lastAddBlocker ?? '', /may or may not be in the cart/, 'uncertainty is reported, not a false failure');
 });
 test("addViaCard: a card with no control at all is 'absent', so the caller can stop the batch", async () => {
     const { card, log } = fakeCard({ addPresent: false });

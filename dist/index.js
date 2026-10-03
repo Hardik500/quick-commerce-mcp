@@ -17,7 +17,7 @@ import { singleFlight } from './single-flight.js';
 import { keyedLock } from './keyed-lock.js';
 import { FLOW_STEPS, clearFlow, fingerprint, loadFlows, saveFlow, selfRepair, verifyFlow } from './flows.js';
 import * as fs from 'node:fs';
-import { relevant, rankByUnitPrice, resolveItem, unitPrice, validateCart } from './ranking.js';
+import { relevant, rankByUnitPrice, resolveItem, stripPackSize, unitPrice, validateCart } from './ranking.js';
 // One line per fee; platforms without itemisation fall back to a lump "Fees" line.
 // What the caller should do about a store banner.
 function noticeAdvice(notice) {
@@ -637,15 +637,18 @@ async function handle(name, args) {
                         content: [{ type: 'text', text: `❌ Not logged in on ${platformName}. Call request_otp for ${platformName} first.` }],
                     };
                 }
+                const resolvedItems = items.map((item) => ({
+                    ...item, name: item.name ?? platform.getProductName(item.productId),
+                }));
                 // Items already in the cart have no ADD button; skip them (validation below flags quantity differences).
-                const norm = (s) => s.toLowerCase().replace(/\s+/g, ' ').trim();
+                const norm = (s) => stripPackSize(s).toLowerCase().replace(/\s+/g, ' ').trim();
                 const existing = (await platform.getCart().catch(() => null))?.items ?? [];
                 const results = [];
                 // Set when the page itself is in the wrong state, rather than one item
                 // being unavailable. Reported once at the end instead of per item.
                 let blocked = '';
                 const unattempted = [];
-                for (const [i, item] of items.entries()) {
+                for (const [i, item] of resolvedItems.entries()) {
                     const label = item.name ?? item.productId;
                     if (item.name && existing.some(e => norm(e.name) === norm(item.name))) {
                         results.push({ name: item.name, success: true, already: true });
@@ -656,7 +659,7 @@ async function handle(name, args) {
                     // the site itself omits from card labels, and searching for the full
                     // string can return nothing at all - search on the product itself.
                     if (item.name) {
-                        const query = item.name.replace(/\s*\([^)]*\)\s*$/, '').trim();
+                        const query = stripPackSize(item.name);
                         // Don't swallow this: if the lookup fails, say so, rather than
                         // letting addToCart report a misleading "product not found".
                         const found = await platform.search(query || item.name).catch((e) => {
@@ -676,7 +679,7 @@ async function handle(name, args) {
                     // one product was out of stock.
                     if (outcome === 'absent') {
                         blocked = `\`${platformName}\` never offered an add-to-cart control on the search results page, so no further items were attempted. This is a page-state or site-change problem, not an out-of-stock one - run \`diagnose_flow\` with platform \`${platformName}\` and step \`addToCart\` to inspect and repair it (no code change or release needed).`;
-                        unattempted.push(...items.slice(i + 1).map((x) => x.name ?? x.productId));
+                        unattempted.push(...resolvedItems.slice(i + 1).map((x) => x.name ?? x.productId));
                         break;
                     }
                     results.push({
@@ -685,9 +688,11 @@ async function handle(name, args) {
                         already: outcome === 'already',
                         error: outcome === 'not-found'
                             ? 'not found in search results on this platform'
-                            : outcome === 'failed'
-                                ? `the add control could not be clicked${platform.lastAddBlocker ? ` - ${platform.lastAddBlocker}` : ''}`
-                                : undefined,
+                            : outcome === 'unavailable'
+                                ? 'out of stock on this platform'
+                                : outcome === 'failed'
+                                    ? platform.lastAddBlocker ?? 'the add control could not be clicked'
+                                    : undefined,
                     });
                 }
                 const failed = results.filter(r => !r.success).length;
@@ -707,11 +712,13 @@ async function handle(name, args) {
                 else {
                     if (cart.notice)
                         responseText += `\n🚫 **Store notice: ${cart.notice}** - ${noticeAdvice(cart.notice)}\n`;
-                    const v = validateCart(items.map((i) => ({ name: i.name ?? '', quantity: i.quantity })).filter((i) => i.name), cart);
-                    if (v.missing.length || v.wrongQty.length || !v.billOk) {
+                    const v = validateCart(resolvedItems.filter((i) => i.name), cart);
+                    const unknownNames = resolvedItems.filter((i) => !i.name);
+                    if (v.missing.length || v.wrongQty.length || !v.billOk || unknownNames.length) {
                         responseText += `\n⚠️ **Cart validation failed**\n`;
                         v.missing.forEach(m => responseText += `- Not in cart: ${m}\n`);
                         v.wrongQty.forEach(m => responseText += `- Quantity mismatch: ${m}\n`);
+                        unknownNames.forEach((i) => responseText += `- Cannot verify product ID ${i.productId}: search for it first or supply its name\n`);
                         if (!v.billOk)
                             responseText += `- Items + fees do not add up to the total; re-check before paying\n`;
                         responseText += `Ask the user whether to retry, pick alternatives (resolve_items) or continue.\n`;

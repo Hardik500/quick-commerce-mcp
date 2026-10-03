@@ -14,7 +14,7 @@ import {
   Address,
 } from './base.js';
 import { sessionPath, ensureSessionDir } from '../session-helper.js';
-import { storeNotice } from '../ranking.js';
+import { storeNotice, stripPackSize } from '../ranking.js';
 import { loadPrefs } from '../preferences.js';
 import type { AddOutcome } from '../engine/add-strategy.js';
 
@@ -335,6 +335,7 @@ export class BlinkitPlatform extends QuickCommercePlatform {
         products = await this.extractProductResults();
       }
 
+      this.rememberSearch(query, products);
       return {
         query,
         platform: this.name,
@@ -451,12 +452,14 @@ export class BlinkitPlatform extends QuickCommercePlatform {
     try {
       // The product's numeric id is the card's DOM id directly.
       const card = this.page.locator(`div[id="${productId}"]`).first();
+      if ((await card.count()) === 0) await this.restoreProductSearch(productId);
       if ((await card.count().catch(() => 0)) === 0) {
         // About this product, not about the page: the caller's other items are
         // still worth attempting.
         console.log('Product not found:', productId);
         return 'not-found';
       }
+      if (await card.getByText(/out of stock|sold out|unavailable/i).first().isVisible().catch(() => false)) return 'unavailable';
 
       // The ADD button turns into a -/qty/+ stepper once the item is in the
       // cart; if it doesn't (e.g. out of stock), the add did not take. Both
@@ -481,11 +484,26 @@ export class BlinkitPlatform extends QuickCommercePlatform {
     }
   }
 
+  private cartNotice?: string;
+
   private async openCart(): Promise<void> {
     if (!this.page) return;
     await this.page.goto(`${this.baseUrl}/cart`, { waitUntil: 'domcontentloaded', timeout: 30000 });
     await this.page.waitForLoadState('networkidle', { timeout: 8000 }).catch(() => {});
     await this.page.locator(this.selectors.cartItems).first().waitFor({ timeout: 5000 }).catch(() => {});
+    // A closed store still allows editing the cart, but its notice dialog
+    // intercepts stepper clicks. Acknowledge that dialog through its own button.
+    this.cartNotice = storeNotice(await this.page.locator('body').innerText());
+    await this.dismissClosedStoreDialog();
+  }
+
+  private async dismissClosedStoreDialog(): Promise<void> {
+    if (!this.page) return;
+    const closed = this.page.locator('.ReactModal__Content').filter({ hasText: /store (is )?(currently )?closed/i }).first();
+    if (await closed.isVisible().catch(() => false)) {
+      await closed.locator('button[class*="DialogButton__Button"]').click({ timeout: 5000 });
+      await closed.waitFor({ state: 'hidden', timeout: 5000 });
+    }
   }
 
   async getCart(): Promise<CartSummary | null> {
@@ -497,15 +515,16 @@ export class BlinkitPlatform extends QuickCommercePlatform {
 
       const rows = await this.page.locator(this.selectors.billRow).evaluateAll(e => e.map(x => (x as HTMLElement).innerText));
       const { subtotal, total, fees } = parseBill(rows);
+      const itemsTotal = subtotal || cartItems.reduce((sum, item) => sum + item.price * item.cartQuantity, 0);
 
       return {
         platform: this.name,
         items: cartItems,
-        subtotal: subtotal || cartItems.reduce((sum, item) => sum + item.price * item.cartQuantity, 0),
-        deliveryFee: total && subtotal ? total - subtotal : 0,
+        subtotal: itemsTotal,
+        deliveryFee: total ? total - itemsTotal : fees.reduce((sum, fee) => sum + fee.amount, 0),
         fees,
-        total: total || subtotal,
-        notice: storeNotice(await this.page.locator('body').innerText().catch(() => '')),
+        total: total || itemsTotal + fees.reduce((sum, fee) => sum + fee.amount, 0),
+        notice: this.cartNotice,
       };
     } catch (error) {
       console.error('Error getting cart:', error);
@@ -523,6 +542,9 @@ export class BlinkitPlatform extends QuickCommercePlatform {
 
       for (const element of cartElements) {
         try {
+          // Blinkit keeps a removed card in the DOM with ADD in place of the
+          // quantity. It is no longer a cart item, even though its row remains.
+          if (await element.$eval(this.selectors.cartStepper, el => el.textContent?.trim().toUpperCase() === 'ADD').catch(() => false)) continue;
           const name = await element.$eval(this.selectors.cartItemName, el => el.textContent?.trim() || '');
           const variant = await element.$eval(this.selectors.cartItemVariant, el => el.textContent?.trim() || '1 unit').catch(() => '1 unit');
           const priceText = await element.$eval(this.selectors.cartItemPrice, el => el.textContent?.trim() || '');
@@ -562,15 +584,26 @@ export class BlinkitPlatform extends QuickCommercePlatform {
     try {
       await this.openCart();
       // Decrement until the row disappears.
+      const name = stripPackSize(productId);
       for (let i = 0; i < 50; i++) {
         const row = this.page
           .locator(this.selectors.cartItems)
-          .filter({ has: this.page.locator(this.selectors.cartItemName, { hasText: productId }) })
+          .filter({ has: this.page.locator(this.selectors.cartItemName, { hasText: name }) })
           .first();
+        const removed = async () =>
+          (await row.count()) === 0 ||
+          (await row.locator(this.selectors.cartStepper).first().innerText({ timeout: 1000 }).catch(() => '')).trim().toUpperCase() === 'ADD';
         // First pass: the drawer may still be rendering; wait for the row.
         if (i === 0) await row.waitFor({ timeout: 5000 }).catch(() => {});
-        if ((await row.count()) === 0) return i > 0;
-        await this.afterChange(() => row.locator(this.selectors.cartStepperMinus).click());
+        if (await removed()) return i > 0;
+        await this.dismissClosedStoreDialog();
+        try {
+          await this.afterChange(() => row.locator(this.selectors.cartStepperMinus).click({ timeout: 3000 }));
+        } catch (error) {
+          // The final decrement can remove the row after the preceding count.
+          if (await removed()) return true;
+          throw error;
+        }
       }
       return false;
     } catch (error) {
@@ -587,7 +620,13 @@ export class BlinkitPlatform extends QuickCommercePlatform {
       for (let i = 0; i < 100; i++) {
         const minus = this.page.locator(`${this.selectors.cartItems} ${this.selectors.cartStepperMinus}`).first();
         if ((await minus.count()) === 0) return true;
-        await this.afterChange(() => minus.click());
+        await this.dismissClosedStoreDialog();
+        try {
+          await this.afterChange(() => minus.click({ timeout: 3000 }));
+        } catch (error) {
+          if ((await minus.count()) === 0) return true;
+          throw error;
+        }
       }
       return false;
     } catch (error) {

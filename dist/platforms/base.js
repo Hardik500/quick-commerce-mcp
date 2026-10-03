@@ -1,11 +1,34 @@
 import { pick } from '../flows.js';
 import { blockedBy, nextAddAction } from '../engine/add-strategy.js';
+/**
+ * How long to wait for a dispatched click to show up on the card.
+ *
+ * Longer than the click budgets it replaces, because after a dispatched click
+ * there is no retry available (see addViaCard), so patience costs nothing and a
+ * slow store is the common case rather than an edge case.
+ */
+const PROOF_AFTER_CLICK_MS = 8000;
 export class QuickCommercePlatform {
     name;
     baseUrl;
     context = null;
     page = null;
     isLoggedIn = false;
+    productQueries = new Map();
+    /** Keep IDs usable after cart/address reads navigate away from search. */
+    rememberSearch(query, products) {
+        for (const product of products)
+            this.productQueries.set(product.id, { query, name: product.name });
+    }
+    /** The name needed to validate ID-only requests against name-based cart rows. */
+    getProductName(productId) {
+        return this.productQueries.get(productId)?.name;
+    }
+    async restoreProductSearch(productId) {
+        const query = this.productQueries.get(productId)?.query;
+        if (query)
+            await this.search(query);
+    }
     /**
      * Why the last add failed, when the cause is something other than a missing
      * button - e.g. "div#cookie-banner ... is covering it". Null when the add
@@ -178,18 +201,31 @@ export class QuickCommercePlatform {
                         return 'absent';
                     const clicked = await add.locator.click({ timeout: action.timeout, force: action.force }).then(() => true, () => false);
                     if (!clicked) {
+                        // Playwright refused to dispatch the click - not visible, outside the
+                        // viewport, or covered. Nothing reached the site, so trying the next
+                        // rung cannot duplicate anything.
                         rung++;
                         break;
                     }
-                    // A click that reported success but changed nothing is the same
-                    // failure as one that threw. Report an add only once the card proves
-                    // it, otherwise the caller verifies a cart that was never touched.
+                    // The click WAS dispatched, so the site may already have added the
+                    // item. Clicking this card again is therefore not a retry, it is a
+                    // second add - and this used to be exactly what happened: with a
+                    // closed store the quantity counter never renders, so the proof below
+                    // always failed, the ladder escalated, and every rung added another
+                    // unit. Asking for 3 put 5 in the cart while reporting a failure.
+                    //
+                    // So there is no second click on this card, whatever happens next.
+                    // Not being able to retry makes waiting free, so the proof gets a
+                    // longer budget than a retry would have been worth.
                     if (spec.between && (await spec.between(card)))
                         return 'added';
-                    const proof = await pick(card, this.name, 'cartLanded', [...spec.landed], 5000);
-                    if (!proof || !(await proof.locator.isVisible().catch(() => false))) {
-                        rung++;
-                        break;
+                    const proof = await pick(card, this.name, 'cartLanded', [...spec.landed], PROOF_AFTER_CLICK_MS);
+                    if (!proof || !(await proof.locator.waitFor({ state: 'visible', timeout: PROOF_AFTER_CLICK_MS }).then(() => true, () => false))) {
+                        // Unproven, but the click landed and may yet be reflected in the
+                        // cart. Say so rather than claiming a failure the read-back will
+                        // contradict; the caller's cart read is the authority here.
+                        this.lastAddBlocker = 'the click was sent but the item has not appeared on the card; it may or may not be in the cart - check get_cart_summary before retrying, retrying could duplicate it';
+                        return 'failed';
                     }
                     await this.topUp(card, spec.increment, quantity);
                     return 'added';

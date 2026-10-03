@@ -15,6 +15,11 @@ Universal quick commerce aggregation via MCP - compare and order from Zepto, Bli
 - **Scannable Payment QR**: UPI QR orders return the QR alone, at full resolution, cropped from the payment sheet — optionally opened in an image viewer so it is actually scannable
 - **OTP Handling**: Prompts for OTP when session expires
 
+## Demo
+
+[![Watch the MCP demo](https://www.loom.com/v1/videos/174a9a22e5d54e15bf27eb2fb77f837f/thumbnail.gif)](https://www.loom.com/share/174a9a22e5d54e15bf27eb2fb77f837f)
+
+
 ## 🚀 Quick Start
 
 **Requirements:** Node 18+ and Google Chrome installed (the server drives your Chrome, no browser download). It runs locally over stdio, so it works in local MCP clients (Claude Desktop, Claude Code, Cursor, Windsurf), not hosted web apps.

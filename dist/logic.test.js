@@ -7,7 +7,7 @@ import { parseInstamartBill } from './platforms/swiggy-instamart.js';
 import { singleFlight } from './single-flight.js';
 import { keyedLock } from './keyed-lock.js';
 import { ADD_RUNGS, blockedBy, nextAddAction } from './engine/add-strategy.js';
-import { FLOW_STEPS } from './flows.js';
+import { FLOW_STEPS, selfRepair } from './flows.js';
 const prod = (o) => ({ id: '1', name: 'Amul Milk', price: 30, quantity: '500 ml', inStock: true, platform: 'blinkit', ...o });
 // Protected helpers are reachable through any concrete platform (constructor does no I/O).
 const platform = new BlinkitPlatform();
@@ -458,5 +458,44 @@ test("blockedBy: reports what covers the control, and never throws", async () =>
     // path of a failed add, where throwing would replace a diagnosis with a crash.
     assert.equal(await blockedBy({}), null);
     assert.equal(await blockedBy({ evaluate: async () => { throw new Error('detached'); } }), null);
+});
+test("addToCart: 'not-found' and 'absent' are different verdicts, not one", async () => {
+    // Regression guard. Both mean "no add happened", but only one of them is a
+    // fact about the page. add_to_cart stops the whole batch on 'absent' and keeps
+    // going on 'not-found', so collapsing them into a single value silently drops
+    // every remaining item in a user's cart whenever one product is out of stock.
+    const missing = new BlinkitPlatform();
+    missing.page = { locator: () => ({ first: () => ({ count: async () => 0 }) }) };
+    assert.equal(await missing.addToCart('999', 1), 'not-found');
+    const { card } = fakeCard({ addPresent: false });
+    const p = new BlinkitPlatform();
+    assert.equal(await p.addViaCard(card, SPEC, 1), 'absent');
+});
+test("selfRepair: survives a page whose elements have ids", async () => {
+    // Regression guard. cssFor() used CSS.escape, a browser API that does not
+    // exist in Node, so any element with an id threw "CSS is not defined" and
+    // diagnose_flow - which always self-repairs when given no selector - crashed
+    // instead of reporting. Blinkit product cards are div[id="..."], so this was
+    // the common case, not an edge case.
+    //
+    // Digit-leading ids get the spec's unicode escape, since "#123" is not a valid
+    // selector and Blinkit's ids are exactly that.
+    const page = {
+        locator: (_sel) => ({
+            first: () => ({ count: async () => 0, fill: async () => { }, evaluate: async () => false }),
+            count: async () => 0,
+            evaluateAll: async () => [],
+        }),
+        evaluate: async () => [
+            { tag: 'div', id: '12345', testIds: [], name: '', ariaLabel: '', placeholder: '', type: '', inputMode: '', autoComplete: '', text: 'Amul Milk', className: '', visible: true },
+            { tag: 'button', id: '42', testIds: [], name: '', ariaLabel: '', placeholder: '', type: '', inputMode: '', autoComplete: '', text: 'ADD', className: '', visible: true },
+        ],
+    };
+    const r = await selfRepair(page, 'blinkit', 'addToCart', []);
+    assert.ok(r, 'must return a verdict rather than throw');
+    assert.ok(r.blocked || r.selector, `expected a verdict, got ${JSON.stringify(r)}`);
+    // And the selector it settled on has to be a valid one, not "#12345".
+    if (r.selector)
+        assert.doesNotMatch(r.selector, /#\d/, 'a bare digit id is not a valid CSS selector');
 });
 //# sourceMappingURL=logic.test.js.map

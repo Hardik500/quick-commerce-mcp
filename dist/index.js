@@ -667,11 +667,13 @@ async function handle(name, args) {
                             continue;
                     }
                     const outcome = await platform.addToCart(item.productId, item.quantity);
-                    // A card with no add control is a fact about the page, not about this
-                    // item: the search results were not in a state where anything could
-                    // be clicked. Carrying on repeats the same doomed lookup for every
-                    // remaining item, which is how one cart spent 110 seconds and added
-                    // nothing. Stop, and hand back something the caller can act on.
+                    // 'absent' means the card was on the page but offered no control to
+                    // click: a fact about the page rather than this item, so continuing
+                    // would repeat a lookup that cannot succeed for every remaining item.
+                    // Stop, and hand back something the caller can act on. A card that was
+                    // never on the page is 'not-found' and stays a per-item failure -
+                    // stopping there would silently drop the rest of a user's list because
+                    // one product was out of stock.
                     if (outcome === 'absent') {
                         blocked = `\`${platformName}\` never offered an add-to-cart control on the search results page, so no further items were attempted. This is a page-state or site-change problem, not an out-of-stock one - run \`diagnose_flow\` with platform \`${platformName}\` and step \`addToCart\` to inspect and repair it (no code change or release needed).`;
                         unattempted.push(...items.slice(i + 1).map((x) => x.name ?? x.productId));
@@ -681,9 +683,11 @@ async function handle(name, args) {
                         name: label,
                         success: outcome === 'added' || outcome === 'already',
                         already: outcome === 'already',
-                        error: outcome === 'failed'
-                            ? `the add control could not be clicked${platform.lastAddBlocker ? ` - ${platform.lastAddBlocker}` : ''}`
-                            : undefined,
+                        error: outcome === 'not-found'
+                            ? 'not found in search results on this platform'
+                            : outcome === 'failed'
+                                ? `the add control could not be clicked${platform.lastAddBlocker ? ` - ${platform.lastAddBlocker}` : ''}`
+                                : undefined,
                     });
                 }
                 const failed = results.filter(r => !r.success).length;

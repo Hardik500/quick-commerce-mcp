@@ -366,8 +366,10 @@ export class SwiggyInstamartPlatform extends QuickCommercePlatform {
           .filter({ hasText: base.slice(0, 40) })
           .first();
         if ((await byText.count().catch(() => 0)) === 0) {
+          // About this product, not about the page: the caller's other items
+          // are still worth attempting.
           console.log('Product not found:', productId);
-          return 'absent';
+          return 'not-found';
         }
         return this.addFromCard(byText, quantity);
       }
@@ -399,7 +401,15 @@ export class SwiggyInstamartPlatform extends QuickCommercePlatform {
           const sheetOpened = await sheet
             .waitFor({ state: 'visible', timeout: 2500 })
             .then(() => true, () => false);
-          if (!sheetOpened) return false; // no sheet: the inline path proves it
+          if (!sheetOpened) {
+            // No sheet, so the add went straight onto the card. The count
+            // element only renders once the add request reaches the server, so
+            // settle before handing the proof back - without this the inline
+            // path is checked while the site is still thinking, and a successful
+            // add gets reported as a failure.
+            await page.waitForLoadState('networkidle', { timeout: 8000 }).catch(() => {});
+            return false;
+          }
 
           const cardPrice = await c.evaluate(
             (el, sel) => el.parentElement?.querySelector(sel)?.textContent?.trim() || '',

@@ -298,6 +298,11 @@ export class ZeptoPlatform extends QuickCommercePlatform {
    * field on it at all.
    */
   async prepareForStep(step: string): Promise<void> {
+    // The step is checked before the page, so a step this platform does not
+    // handle stays a no-op even with no page - which is how it behaved before
+    // addToCart was added here.
+    const handled = step === 'addToCart' || /phoneInput|loginTrigger/.test(step);
+    if (!handled) return;
     const page = this.page;
     if (!page) throw new Error('Platform not initialized');
 
@@ -315,7 +320,6 @@ export class ZeptoPlatform extends QuickCommercePlatform {
       return;
     }
 
-    if (!/phoneInput|loginTrigger/.test(step)) return;
     await page.goto(this.baseUrl, { waitUntil: 'domcontentloaded', timeout: 45000 });
     const tel = page
       .locator(selectorFor(this.name, 'phoneInput', 'input[type="tel"][placeholder*="Phone" i]'))
@@ -511,8 +515,10 @@ export class ZeptoPlatform extends QuickCommercePlatform {
       // what used to surface as 30s of "element is not visible".
       const card = this.page.locator(`${this.selectors.searchResults}[href*="/pvid/${productId}"]`).first();
       if ((await card.count().catch(() => 0)) === 0) {
+        // About this product, not about the page: the caller's other items are
+        // still worth attempting.
         console.log('Product not found:', productId);
-        return 'absent';
+        return 'not-found';
       }
 
       // The ADD button turns into a stepper once the item is in the cart, and

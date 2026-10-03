@@ -452,8 +452,10 @@ export class BlinkitPlatform extends QuickCommercePlatform {
       // The product's numeric id is the card's DOM id directly.
       const card = this.page.locator(`div[id="${productId}"]`).first();
       if ((await card.count().catch(() => 0)) === 0) {
+        // About this product, not about the page: the caller's other items are
+        // still worth attempting.
         console.log('Product not found:', productId);
-        return 'absent';
+        return 'not-found';
       }
 
       // The ADD button turns into a -/qty/+ stepper once the item is in the

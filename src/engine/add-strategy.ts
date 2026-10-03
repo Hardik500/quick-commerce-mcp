@@ -45,12 +45,23 @@ export type AddAction =
   | { kind: 'click'; timeout: number; force: boolean };
 
 /**
- * How an add ended, for the caller to act on. 'already' and 'absent' are the
- * two the old boolean return could not express: one is a success, and the other
- * means the page was never in the state the caller asked for, which is worth
- * failing a whole batch over rather than repeating per item.
+ * How an add ended, for the caller to act on.
+ *
+ * The distinctions exist because the caller has to treat these differently, and
+ * collapsing any two of them costs the user something real:
+ *
+ * - 'added' / 'already'  - the item is in the cart. Both are successes; 'already'
+ *   must never be clicked again.
+ * - 'not-found'          - this product's card is not on the page. A fact about
+ *   one item (it may be out of stock, or its search may not have surfaced it), so
+ *   the caller reports it and carries on with the rest of the list.
+ * - 'absent'             - the card IS on the page but offers no add control at
+ *   all. A fact about the page, not the item, so the caller stops rather than
+ *   repeating a lookup that cannot succeed.
+ * - 'failed'             - a control was there and the click did not take. About
+ *   this card, so the caller carries on.
  */
-export type AddOutcome = 'added' | 'already' | 'absent' | 'failed';
+export type AddOutcome = 'added' | 'already' | 'not-found' | 'absent' | 'failed';
 
 /**
  * Click attempts in order. The first covers the ordinary case, including a

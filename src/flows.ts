@@ -230,16 +230,38 @@ const facts = (page: Page, scope: string): Promise<ElementFacts[]> =>
     });
   }, scope);
 
+/**
+ * Escape a string for use as a CSS identifier, for the `#id` and `.class` forms.
+ *
+ * `CSS.escape` is a browser API. This file runs in Node, where `CSS` does not
+ * exist, so calling it threw `ReferenceError: CSS is not defined` and took the
+ * whole self-repair path down with it: diagnose_flow without a selector always
+ * runs selfRepair, so any page containing an element with an id produced a
+ * crash instead of a diagnosis - and Blinkit product cards are `div[id="..."]`,
+ * so it was not an edge case.
+ *
+ * Scoped to what an attribute-derived id or class can contain: enough to make
+ * the identifier valid, not a general-purpose implementation. Ordinary names
+ * come back unchanged.
+ */
+function cssEscapeIdent(value: string): string {
+  const escaped = value.replace(/[^a-zA-Z0-9_-]/g, ch => `\\${ch}`);
+  // A CSS identifier may not start with a digit, and ids are frequently exactly
+  // that - Blinkit's are. The spec's form is a unicode escape, which needs the
+  // trailing space to terminate it.
+  return /^\d/.test(escaped) ? `\\3${escaped[0]} ${escaped.slice(1)}` : escaped;
+}
+
 /** A CSS selector for an element: the most stable thing that identifies it. */
 function cssFor(f: ElementFacts): string {
   const tid = f.testIds[0];
   if (tid) return `[data-testid="${tid}"]`;
-  if (f.id) return `#${CSS.escape(f.id)}`;
+  if (f.id) return `#${cssEscapeIdent(f.id)}`;
   if (f.ariaLabel) return `${f.tag}[aria-label="${f.ariaLabel}"]`;
   if (f.placeholder) return `${f.tag}[placeholder="${f.placeholder}"]`;
   if (f.name) return `${f.tag}[name="${f.name}"]`;
   const cls = f.className.split(/\s+/).filter(Boolean)[0];
-  return cls ? `${f.tag}.${CSS.escape(cls)}` : f.tag;
+  return cls ? `${f.tag}.${cssEscapeIdent(cls)}` : f.tag;
 }
 
 const has = (hay: string, needle: RegExp) => needle.test(hay);

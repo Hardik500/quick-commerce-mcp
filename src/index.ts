@@ -40,6 +40,29 @@ function feeLines(cart: { fees?: { label: string; amount: number }[]; deliveryFe
 // All platforms supported by the "all" shorthand in tool inputs.
 const ALL_PLATFORMS = ['zepto', 'swiggy-instamart', 'blinkit'];
 
+/**
+ * This server's version, read from package.json rather than written here.
+ *
+ * It was hardcoded as '1.0.0' and stayed there through every release, so every
+ * MCP client was told it was running 1.0.0 while npm served 1.4.1 - which is
+ * exactly the wrong thing to be wrong about, because the handshake version is
+ * what a client shows when something needs diagnosing. Reading the file makes
+ * the drift impossible rather than merely fixed once.
+ *
+ * package.json sits next to dist/ both in the repo and in the published
+ * tarball, so this resolves in either. The fallback matters because it runs
+ * during module load, before anything can report an error: a missing or
+ * unparseable file must not stop the server from starting.
+ */
+const VERSION: string = (() => {
+  try {
+    const raw = fs.readFileSync(new URL('../package.json', import.meta.url), 'utf8');
+    return JSON.parse(raw).version ?? 'unknown';
+  } catch {
+    return 'unknown';
+  }
+})();
+
 function resolvePlatforms(list: string | string[]): string[] {
   const names = ([] as string[]).concat(list);
   return names.includes('all') ? ALL_PLATFORMS : names;
@@ -424,7 +447,7 @@ const getPlatform = singleFlight(async (name: string): Promise<QuickCommercePlat
 const server = new Server(
   {
     name: 'quick-commerce-mcp',
-    version: '1.0.0',
+    version: VERSION,
   },
   {
     capabilities: {
@@ -1116,7 +1139,7 @@ async function handle(name: string, args: any): Promise<any> {
 async function main() {
   const transport = new StdioServerTransport();
   await server.connect(transport);
-  console.error('Quick Commerce MCP server running on stdio');
+  console.error(`Quick Commerce MCP server ${VERSION} running on stdio`);
 }
 
 main().catch((error) => {

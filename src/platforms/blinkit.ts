@@ -18,6 +18,15 @@ import { storeNotice, stripPackSize } from '../ranking.js';
 import { loadPrefs } from '../preferences.js';
 import type { AddOutcome } from '../engine/add-strategy.js';
 
+/** Runs in the page: a legacy cookie alone also exists in logged-out sessions. */
+function authenticatedClientState(): boolean {
+  try {
+    const auth = JSON.parse(localStorage.getItem('auth') || '{}');
+    const profile = JSON.parse(localStorage.getItem('user') || '{}').profile;
+    return !!auth.accessToken || !!(profile && Object.keys(profile).length);
+  } catch { return false; }
+}
+
 /** Bill rows look like "Items total Saved ₹2 ₹195 ₹193" or "Handling charge ₹12": last ₹ amount is what's charged. */
 export function parseBill(rows: string[]): { subtotal: number; total: number; fees: { label: string; amount: number }[] } {
   let subtotal = 0, total = 0;
@@ -196,12 +205,13 @@ export class BlinkitPlatform extends QuickCommercePlatform {
     if (!this.page) throw new Error('Platform not initialized');
 
     try {
-      // gr_1_accessToken is Blinkit's auth cookie (gr_1 = legacy Grofers
-      // brand prefix) - present only once phone+OTP login succeeds.
+      // Blinkit can retain this legacy cookie while its client is logged out.
+      // Require authenticated client state too, rather than certifying that
+      // incomplete snapshot (or accepting a rejected OTP) as a valid login.
       const cookies = await this.context!.cookies();
       const authCookie = cookies.find(c => c.name === 'gr_1_accessToken');
 
-      if (authCookie && authCookie.value) {
+      if (authCookie?.value && await this.page.evaluate(authenticatedClientState)) {
         this.isLoggedIn = true;
         this.sessionVerified = true;
         return { loggedIn: true };
@@ -290,7 +300,11 @@ export class BlinkitPlatform extends QuickCommercePlatform {
       // auto-advances focus through the rest (see scripts/auto-login-blinkit.ts).
       await otpInput.click();
       await this.page.keyboard.type(otp);
-      await this.page.locator(this.selectors.otpInput).first().waitFor({ state: 'hidden', timeout: 15000 }).catch(() => {});
+      await this.page.locator(this.selectors.otpInput).first().waitFor({ state: 'hidden', timeout: 15000 });
+      // The boxes vanish before Blinkit finishes verification and persists the
+      // account state. Saving or navigating now can freeze a logged-out state
+      // beside the old cookie, which only fails on the next server startup.
+      await this.page.waitForFunction(authenticatedClientState, undefined, { timeout: 15000 });
 
       const loginCheck = await this.checkLogin();
       if (loginCheck.loggedIn) {
@@ -578,6 +592,33 @@ export class BlinkitPlatform extends QuickCommercePlatform {
     return items;
   }
 
+  private async decrementCartRow(row: Locator): Promise<void> {
+    const name = (await row.locator(this.selectors.cartItemName).innerText()).trim();
+    const before = await row.locator(this.selectors.cartStepper).evaluate(el =>
+      parseInt(Array.from(el.childNodes).find(n => n.nodeType === Node.TEXT_NODE)?.textContent?.trim() || '0', 10));
+    // The quantity changes optimistically. A reload (or another decrement)
+    // must not race the request that makes that quantity authoritative.
+    // Blinkit POSTs a new cart, but PUTs /carts/<id> for an existing one.
+    const committed = this.page!.waitForResponse(response =>
+      ['POST', 'PUT'].includes(response.request().method()) && /\/v\d+\/carts(?:\/\d+)?\/?$/.test(new URL(response.url()).pathname),
+    { timeout: 10000 }).catch(() => null);
+    await row.locator(this.selectors.cartStepperMinus).click({ timeout: 3000 });
+    const response = await committed;
+    if (!response?.ok()) throw new Error('Blinkit did not confirm the cart update');
+    const error = await response.finished();
+    if (error) throw error;
+    await this.page!.waitForFunction(({ selectors, name, before }) => {
+      const row = Array.from(document.querySelectorAll(selectors.cartItems))
+        .find(el => el.querySelector(selectors.cartItemName)?.textContent?.trim() === name);
+      if (!row) return true;
+      const stepper = row.querySelector(selectors.cartStepper);
+      if (!stepper) return false;
+      if (stepper.textContent?.trim().toUpperCase() === 'ADD') return true;
+      const quantity = parseInt(Array.from(stepper.childNodes).find(n => n.nodeType === Node.TEXT_NODE)?.textContent?.trim() || '', 10);
+      return quantity < before;
+    }, { selectors: this.selectors, name, before }, { timeout: 5000 });
+  }
+
   async removeFromCart(productId: string): Promise<boolean> {
     if (!this.page) throw new Error('Platform not initialized');
 
@@ -597,13 +638,7 @@ export class BlinkitPlatform extends QuickCommercePlatform {
         if (i === 0) await row.waitFor({ timeout: 5000 }).catch(() => {});
         if (await removed()) return i > 0;
         await this.dismissClosedStoreDialog();
-        try {
-          await this.afterChange(() => row.locator(this.selectors.cartStepperMinus).click({ timeout: 3000 }));
-        } catch (error) {
-          // The final decrement can remove the row after the preceding count.
-          if (await removed()) return true;
-          throw error;
-        }
+        await this.decrementCartRow(row);
       }
       return false;
     } catch (error) {
@@ -618,15 +653,11 @@ export class BlinkitPlatform extends QuickCommercePlatform {
     try {
       await this.openCart();
       for (let i = 0; i < 100; i++) {
-        const minus = this.page.locator(`${this.selectors.cartItems} ${this.selectors.cartStepperMinus}`).first();
-        if ((await minus.count()) === 0) return true;
+        const row = this.page.locator(this.selectors.cartItems)
+          .filter({ has: this.page.locator(this.selectors.cartStepperMinus) }).first();
+        if ((await row.count()) === 0) return true;
         await this.dismissClosedStoreDialog();
-        try {
-          await this.afterChange(() => minus.click({ timeout: 3000 }));
-        } catch (error) {
-          if ((await minus.count()) === 0) return true;
-          throw error;
-        }
+        await this.decrementCartRow(row);
       }
       return false;
     } catch (error) {

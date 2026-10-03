@@ -4,7 +4,7 @@
  * implementations.
  *
  * Sessions are stored as Playwright `storageState()` snapshots (cookies +
- * localStorage + sessionStorage), not just cookies, since SPAs like Zepto
+ * localStorage), not just cookies, since SPAs like Zepto
  * keep auth tokens in localStorage.
  *
  * Interactive login usage:

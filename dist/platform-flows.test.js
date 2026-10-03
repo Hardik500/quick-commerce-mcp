@@ -1,6 +1,9 @@
 import { after, before, test } from 'node:test';
 import assert from 'node:assert/strict';
 import { chromium } from 'playwright';
+import { mkdtemp, rm } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { BlinkitPlatform } from './platforms/blinkit.js';
 import { ZeptoPlatform } from './platforms/zepto.js';
 let browser;
@@ -13,13 +16,19 @@ before(async () => {
 after(async () => { await browser?.close(); });
 // Serve deterministic storefronts at the browser/network boundary. The tests
 // exercise the public platform methods using real DOM queries and clicks.
-async function storefront(kind, proofDelay = 0, closed = false, inStock = true, keepRemovedCard = false, mutationDelay = 0) {
+async function storefront(kind, proofDelay = 0, closed = false, inStock = true, keepRemovedCard = false, mutationDelay = 0, blinkitCartId = '') {
     const context = await browser.newContext();
     const origin = kind === 'blinkit' ? 'https://blinkit.com' : 'https://www.zeptonow.com';
     let persistedQuantity = mutationDelay ? 3 : null;
     await context.addCookies([{ name: kind === 'blinkit' ? 'gr_1_accessToken' : 'user_id', value: 'fixture-account', url: origin }]);
+    await context.addInitScript(() => {
+        if (!localStorage.getItem('auth'))
+            localStorage.setItem('auth', JSON.stringify({ accessToken: 'fixture-account', phoneNumber: 'fixture-phone' }));
+        if (!localStorage.getItem('user'))
+            localStorage.setItem('user', JSON.stringify({ profile: { id: 'fixture-user' } }));
+    });
     await context.route(`${origin}/**`, async (route) => {
-        if (new URL(route.request().url()).pathname === '/cfs/api/v1/cart') {
+        if (new URL(route.request().url()).pathname === '/cfs/api/v1/cart' || /^\/v5\/carts(?:\/\d+)?$/.test(new URL(route.request().url()).pathname)) {
             const next = Number(route.request().postData());
             if (mutationDelay)
                 await new Promise(resolve => setTimeout(resolve, mutationDelay));
@@ -43,6 +52,7 @@ async function storefront(kind, proofDelay = 0, closed = false, inStock = true, 
       function qty() { return Number(localStorage.getItem('quantity') || 0); }
       function change(delta) {
         localStorage.setItem('quantity', Math.max(0, qty() + delta));
+        if (${kind === 'blinkit'}) fetch(${JSON.stringify('/v5/carts' + (blinkitCartId ? '/' + blinkitCartId : ''))}, { method: ${JSON.stringify(blinkitCartId ? 'PUT' : 'POST')}, body: String(qty()) }).catch(() => {});
         if (${kind === 'zepto'} && (qty() || ${mutationDelay})) fetch('/cfs/api/v1/cart', { method: 'PUT', body: String(qty()) }).catch(() => {});
         render();
       }
@@ -80,6 +90,76 @@ async function storefront(kind, proofDelay = 0, closed = false, inStock = true, 
     Object.assign(platform, { page, context });
     return { platform, page, context };
 }
+test('blinkit: a legacy cookie without authenticated client state is not a login', async () => {
+    const { platform, page, context } = await storefront('blinkit');
+    try {
+        await page.evaluate(() => {
+            localStorage.setItem('auth', JSON.stringify({ accessToken: null, phoneNumber: null }));
+            localStorage.setItem('user', JSON.stringify({ profile: {} }));
+        });
+        assert.equal((await platform.checkLogin()).loggedIn, false);
+    }
+    finally {
+        await context.close();
+    }
+});
+async function loginStorefront(context, delay = 600) {
+    await context.route('https://blinkit.com/**', async (route) => {
+        if (new URL(route.request().url()).pathname === '/fixture-verify-otp') {
+            // OTP inputs disappear while verification/client hydration is pending.
+            await new Promise(resolve => setTimeout(resolve, delay));
+            await route.fulfill({ json: { ok: true } }).catch(() => { });
+            return;
+        }
+        await route.fulfill({ contentType: 'text/html', body: `<!doctype html><body>
+      <button class="LocationBar__Subtitle" onclick="showAddresses()">Delivery location</button>
+      <main></main><script>
+        function authenticated() { return !!JSON.parse(localStorage.getItem('auth') || '{}').accessToken; }
+        if (!authenticated()) document.querySelector('main').innerHTML = '<input type="password" maxlength="4" data-test-id="otp-text-box" oninput="if(this.value.length===4) verifyOtp()">';
+        async function verifyOtp() {
+          document.querySelector('main').innerHTML = 'Verifying login';
+          await fetch('/fixture-verify-otp', {method:'POST'});
+          localStorage.setItem('auth', JSON.stringify({accessToken:'fixture-auth',phoneNumber:'fixture-phone'}));
+          localStorage.setItem('user', JSON.stringify({profile:{id:'fixture-user'}}));
+          document.cookie = 'gr_1_accessToken=fixture-auth;path=/';
+          document.querySelector('main').innerHTML = 'Logged in';
+        }
+        function showAddresses() {
+          document.querySelector('main').innerHTML = authenticated()
+            ? '<div class="AddressListItem__AddressItemWrapperItem">Fixture home<br>Fixture lane, Test city, 560102</div>'
+            : 'Select delivery location';
+        }
+      </script></body>` });
+    });
+    const page = await context.newPage();
+    await page.goto('https://blinkit.com');
+    const platform = new BlinkitPlatform();
+    Object.assign(platform, { context, page });
+    return { platform, page };
+}
+test('blinkit: OTP success persists a session usable by a fresh browser', async (t) => {
+    const taskSnapshotDir = await mkdtemp(join(tmpdir(), 'qc-login-test-'));
+    const snapshot = join(taskSnapshotDir, 'session.json');
+    const context = await browser.newContext();
+    let restored;
+    try {
+        await context.addCookies([{ name: 'gr_1_accessToken', value: 'stale-fixture-cookie', url: 'https://blinkit.com' }]);
+        const { platform } = await loginStorefront(context);
+        // Redirect the external browser's file write, never a user's saved session.
+        const storageState = context.storageState.bind(context);
+        t.mock.method(context, 'storageState', (options) => storageState({ ...options, path: snapshot }));
+        assert.equal(await platform.submitOtp('1234'), true);
+        restored = await browser.newContext({ storageState: snapshot });
+        const next = await loginStorefront(restored);
+        assert.equal((await next.platform.checkLogin()).loggedIn, true);
+        assert.equal((await next.platform.getAddresses()).length, 1);
+    }
+    finally {
+        await restored?.close();
+        await context.close();
+        await rm(taskSnapshotDir, { recursive: true, force: true });
+    }
+});
 test('blinkit: the store-closed dialog permits cart removal and clearing', async () => {
     const { platform, page, context } = await storefront('blinkit', 0, true);
     page.setDefaultTimeout(1000);
@@ -135,6 +215,25 @@ test('zepto: removal and clearing wait for persisted mutations before cart reloa
         await context.close();
     }
 });
+for (const cartId of ['', '42']) {
+    test(`blinkit: ${cartId ? 'existing' : 'new'} cart removal and clearing wait for persisted mutations before reload`, async () => {
+        const { platform, page, context } = await storefront('blinkit', 0, false, true, true, 600, cartId);
+        try {
+            await page.evaluate(() => localStorage.setItem('quantity', '3'));
+            assert.equal(await platform.removeFromCart('Test Milk'), true);
+            assert.equal((await platform.getCart())?.items.length, 0);
+            await page.evaluate(async () => {
+                localStorage.setItem('quantity', '2');
+                await fetch('/v5/carts', { method: 'POST', body: '2' });
+            });
+            assert.equal(await platform.clearCart(), true);
+            assert.equal((await platform.getCart())?.items.length, 0);
+        }
+        finally {
+            await context.close();
+        }
+    });
+}
 for (const kind of ['blinkit', 'zepto']) {
     test(`${kind}: out-of-stock products are item failures, not page-wide blockers`, async () => {
         const { platform, context } = await storefront(kind, 0, false, false);

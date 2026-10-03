@@ -92,8 +92,8 @@ works from the repo with `npm run build && node dist/session-helper.js login zep
 
 ## How sessions work
 
-Sessions are Playwright `storageState()` snapshots - cookies **plus** localStorage and
-sessionStorage - written to:
+Sessions are Playwright `storageState()` snapshots - cookies **plus** localStorage -
+written to:
 
 ```
 ~/.quick-commerce-mcp/sessions/<platform>-session.json
@@ -107,13 +107,18 @@ What marks you as logged in, per platform:
 | Platform | Signal |
 |---|---|
 | Zepto | the `user_id` cookie |
-| Blinkit | the `gr_1_accessToken` cookie |
+| Blinkit | the `gr_1_accessToken` cookie plus authenticated client state |
 | Swiggy Instamart | the `_session_tid` cookie |
 
 Note Zepto is **not** identified by its `session_id` cookie - an anonymous visit is
 handed one of those too, so it can't be used to tell a session from a fresh browser.
 
 Sessions expire. When they do, log in again; nothing else needs reinstalling.
+
+Blinkit's OTP boxes can disappear before authentication finishes. The connector waits
+for authenticated client state before saving, so an incomplete snapshot is not reported
+as a successful login. Older incomplete snapshots need one fresh OTP login; then the
+saved account can be restored by a new server process.
 
 ## When the sites change their markup
 

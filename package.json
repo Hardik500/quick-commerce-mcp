@@ -14,7 +14,12 @@
     "README.md",
     "AUTHENTICATION.md",
     "MCP_SETUP.md",
-    "LICENSE"
+    "LICENSE",
+    "scripts/bigbasket-windows-bridge.mjs",
+    "scripts/bigbasket-windows-worker.mjs",
+    "scripts/bigbasket-background-desktop.ps1",
+    "scripts/open-bigbasket-browser.mjs",
+    "scripts/verify-bigbasket-mcp.mjs"
   ],
   "scripts": {
     "build": "tsc",

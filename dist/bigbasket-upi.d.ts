@@ -10,8 +10,20 @@ export declare class BigBasketUpiCheckout {
     constructor(journalPath?: string | undefined);
     hasPending(): boolean;
     private generateControl;
-    private graphics;
     prepare(page: Page, preview: OrderPreview): Promise<WalletOrderResult>;
     submit(page: Page, preview: OrderPreview): Promise<WalletOrderResult>;
 }
+/** Read an already generated QR without clicking, navigating or creating a transaction. */
+export declare function readBigBasketQr(page: Page, total: number): Promise<{
+    image: Buffer<ArrayBuffer>;
+    expiry: string;
+    details: {
+        amount: number;
+        currency: string;
+        merchant: string;
+        hasReference: boolean;
+        width: number;
+        height: number;
+    };
+}>;
 //# sourceMappingURL=bigbasket-upi.d.ts.map

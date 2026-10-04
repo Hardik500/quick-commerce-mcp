@@ -2,6 +2,7 @@ import { walletFingerprint } from './wallet.js';
 import { paymentRoot } from './payment-ui.js';
 import { existsSync, readFileSync, mkdirSync, writeFileSync } from 'node:fs';
 import { dirname } from 'node:path';
+import { validateUpiQr } from './upi-qr.js';
 /** Generating a merchant QR can create a pending transaction. Approval and
  * a durable shared wallet/UPI guard precede the single dispatch. */
 export class BigBasketUpiCheckout {
@@ -36,24 +37,12 @@ export class BigBasketUpiCheckout {
         }
         return visible.length === 1 ? visible[0] : undefined;
     }
-    async graphics(page) {
-        const root = await paymentRoot(page);
-        const graphics = [];
-        for (const graphic of await root.locator('img[alt*="qr" i], img[src^="data:image/png;base64,"], canvas').all()) {
-            if (!await graphic.isVisible())
-                continue;
-            const box = await graphic.boundingBox();
-            if (box && box.width >= 120 && box.height >= 120 && Math.abs(box.width / box.height - 1) < 0.2)
-                graphics.push(graphic);
-        }
-        return graphics;
-    }
     async prepare(page, preview) {
         this.armed = undefined;
         if (this.hasPending())
             return { success: false, message: 'An earlier payment is unresolved. Reconcile it in the app before starting another payment.' };
         if (!Number.isFinite(preview.cart.total) || preview.cart.total <= 0 || !preview.address || !preview.cart.items.length ||
-            !await this.generateControl(page) || (await this.graphics(page)).length > 0)
+            !await this.generateControl(page) || (await qrGraphics(page)).length > 0)
             return { success: false, message: 'No unique enabled BigBasket Generate QR Code control or complete checkout found. No payment attempted.' };
         this.armed = walletFingerprint(preview);
         return { success: false, ready: true, total: preview.cart.total, submitted: false,
@@ -66,7 +55,7 @@ export class BigBasketUpiCheckout {
             return { success: false, submitted: false,
                 message: 'QR approval is missing, used, or the cart/address/amount changed. No payment attempted.' };
         const control = await this.generateControl(page);
-        if (!control || (await this.graphics(page)).length > 0)
+        if (!control || (await qrGraphics(page)).length > 0)
             return { success: false, submitted: false, message: 'QR generation control is absent, disabled or ambiguous. No payment attempted.' };
         try {
             if (this.journalPath) {
@@ -81,14 +70,19 @@ export class BigBasketUpiCheckout {
         }
         try {
             await control.click({ timeout: 5000 });
-            const root = await paymentRoot(page);
             const deadline = Date.now() + 10000;
             while (Date.now() < deadline) {
-                const graphics = await this.graphics(page);
+                const graphics = await qrGraphics(page);
                 if (graphics.length === 1) {
-                    const image = await graphics[0].screenshot({ type: 'png', scale: 'css', timeout: 5000 });
-                    const text = await root.locator('body').innerText();
-                    const expiry = text.split('\n').find(line => /(?:expire|valid for|remaining)/i.test(line)) ?? '';
+                    let captured;
+                    try {
+                        captured = await readBigBasketQr(page, preview.cart.total);
+                    }
+                    catch {
+                        await page.waitForTimeout(200); // The QR can render after its image/canvas container.
+                        continue;
+                    }
+                    const { image, expiry } = captured;
                     return { success: true, submitted: true, status: 'pending', total: preview.cart.total, image,
                         message: `BigBasket UPI QR is ready for ₹${preview.cart.total}. Scan it with any UPI app. ${expiry} Payment and order completion are not confirmed. Do not generate another QR or switch methods until this attempt is reconciled.` };
                 }
@@ -96,7 +90,49 @@ export class BigBasketUpiCheckout {
             }
         }
         catch { /* A lost response can follow a successful transaction dispatch. */ }
-        return { success: false, submitted: true, status: 'unknown', message: 'QR generation was attempted but no unique QR image was observed. Inspect the app/payment history; do not retry or switch methods.' };
+        return { success: false, submitted: true, status: 'unknown', message: 'QR generation was attempted but no unique decodable QR matching the approved amount/currency/merchant was observed. Inspect the app/payment history; do not retry or switch methods.' };
     }
+}
+async function qrGraphics(page) {
+    const root = await paymentRoot(page);
+    const graphics = [];
+    for (const graphic of await root.locator('img[alt*="qr" i], img[src^="data:image/"], canvas').all()) {
+        if (!await graphic.isVisible())
+            continue;
+        const box = await graphic.boundingBox();
+        if (box && box.width >= 120 && box.height >= 120 && Math.abs(box.width / box.height - 1) < 0.2)
+            graphics.push(graphic);
+    }
+    return graphics;
+}
+/** Read an already generated QR without clicking, navigating or creating a transaction. */
+export async function readBigBasketQr(page, total) {
+    const graphics = await qrGraphics(page);
+    if (graphics.length !== 1)
+        throw new Error('No unique QR graphic found.');
+    // Normalize GIF/image pixels directly, avoiding animated-layout screenshot waits.
+    const png = await graphics[0].evaluate(element => {
+        if (element instanceof HTMLCanvasElement)
+            return element.toDataURL('image/png');
+        if (!(element instanceof HTMLImageElement) || !element.complete || !element.naturalWidth)
+            return undefined;
+        const canvas = document.createElement('canvas');
+        canvas.width = element.naturalWidth;
+        canvas.height = element.naturalHeight;
+        const context = canvas.getContext('2d');
+        if (!context)
+            return undefined;
+        context.drawImage(element, 0, 0);
+        return canvas.toDataURL('image/png');
+    });
+    if (!png)
+        throw new Error('QR pixels have not loaded.');
+    const image = Buffer.from(png.slice(png.indexOf(',') + 1), 'base64');
+    const details = validateUpiQr(image, total, /^(?:INNOVATIVE RETAIL CONCEPTS PRIVATE LIMITED|BIGBASKET)$/i);
+    const root = await paymentRoot(page);
+    const lines = (await root.locator('body').innerText()).split('\n').map(line => line.trim()).filter(Boolean);
+    const expiryIndex = lines.findIndex(line => /(?:expire|valid for|remaining|approve payment within)/i.test(line));
+    const expiry = expiryIndex < 0 ? '' : lines.slice(expiryIndex, expiryIndex + 2).join(' ');
+    return { image, expiry, details };
 }
 //# sourceMappingURL=bigbasket-upi.js.map

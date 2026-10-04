@@ -475,6 +475,11 @@ for scanning with any UPI app. It reports **pending**, never a paid/confirmed or
 A shared wallet/UPI attempt journal prevents duplicate generation or fallback after
 an uncertain result, including across MCP restarts. Reconcile the attempt in the
 merchant app before clearing that guard. Cart, address and payable amount must
-still match the approved preview. QR dispatch/extraction is fixture-tested; live
-QR generation and actual payment completion remain untested. UPI collect is not
+still match the approved preview. Live QR generation was verified on 2026-10-04: Juspay returned a GIF QR,
+normalized from native image pixels to PNG and successfully decoded as a UPI payment for
+₹162.59 INR to INNOVATIVE RETAIL CONCEPTS PRIVATE LIMITED. The adapter now checks
+decodability, exact amount, currency and merchant before returning a QR as ready.
+The image and private full-resolution file are returned to the client; no payment
+was made. Fixtures include GIF extraction and mismatched/invalid payloads. Actual
+payment completion remains untested. UPI collect is not
 offered in the observed screen and is not enabled for BigBasket.

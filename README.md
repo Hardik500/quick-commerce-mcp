@@ -128,8 +128,8 @@ It supports OTP login, search, ID-based cart additions with basket quantity
 verification, individual removal, saved-address selection, and checkout preview.
 Payment options are read from the Juspay iframe, and the preview reads the actual
 payable total, including checkout discounts. Eligible wallet execution uses the
-shared wallet controller; other payment execution and bulk clearing remain
-disabled. Checkout stops if BigBasket requests removal of
+shared wallet controller. UPI QR generation uses a confirmed, one-shot handoff;
+other payment execution and bulk clearing remain disabled. Checkout stops if BigBasket requests removal of
 unavailable pre-existing items; it does not confirm that removal automatically.
 
 After login, the connector reuses a confirmed address saved per platform. A
@@ -241,7 +241,7 @@ Existing automated submission coverage remains:
 | Blinkit | UPI collect, saved card, COD, eligible wallets | QR, unsupported wallets, new cards, other modes |
 | Zepto | UPI QR, saved card, COD, eligible wallets | Collect, unsupported wallets, new cards, other modes |
 | Instamart | COD, eligible wallets | UPI, unsupported wallets, cards, other modes |
-| BigBasket | Eligible wallets | UPI, unsupported wallets, cards, COD, other modes |
+| BigBasket | UPI QR handoff, eligible wallets (fixtures; live submission pending) | UPI collect, unsupported wallets, cards, COD, other modes |
 
 `place_order` accepts `auto` or an omitted method for preference routing, but
 only adapter-supported modes can submit. Explicit order approval remains
@@ -463,3 +463,18 @@ This is an unofficial project, not affiliated with Zepto, Blinkit or Swiggy. It 
 ---
 
 **Created**: 2026-02-12
+
+### BigBasket UPI QR handoff
+
+The observed BigBasket Juspay desktop UPI screen offers **Generate QR Code**.
+It has no UPI-ID/phone input, and the bank handles shown underneath are suggestions,
+not a saved UPI account. `prepare_payment` opens this screen without generating a
+transaction. `place_order(payment_method: "upi_qr")` prepares a confirmation token;
+the confirmed second call generates once and returns the QR image and private file
+for scanning with any UPI app. It reports **pending**, never a paid/confirmed order.
+A shared wallet/UPI attempt journal prevents duplicate generation or fallback after
+an uncertain result, including across MCP restarts. Reconcile the attempt in the
+merchant app before clearing that guard. Cart, address and payable amount must
+still match the approved preview. QR dispatch/extraction is fixture-tested; live
+QR generation and actual payment completion remain untested. UPI collect is not
+offered in the observed screen and is not enabled for BigBasket.

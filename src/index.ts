@@ -111,7 +111,7 @@ const orderTokens: Map<string, { platform: string; method: string; detail?: stri
 
 // Payment modes place_order can drive, per platform. Anything else gets a friendly refusal.
 const SUPPORTED_PAYMENTS: Record<string, string[]> = {
-  bigbasket: ['wallet'],
+  bigbasket: ['wallet', 'upi_qr'],
   blinkit: ['cod', 'upi', 'card', 'wallet'],
   zepto: ['cod', 'upi_qr', 'card', 'wallet'],
   swiggy: ['cod', 'wallet'],
@@ -256,7 +256,7 @@ const TOOLS: Tool[] = [
         platform: { type: 'string', enum: ['zepto', 'swiggy', 'swiggy-instamart', 'blinkit', 'bigbasket'], description: 'Platform to order on' },
         payment_method: {
           type: 'string',
-          description: 'auto uses preferences. wallet supports native or linked balances covering the full bill on all apps when balance, selector, applied credit and final control are observable. upi/upi_collect means collect on Blinkit; upi_qr generates a QR on Zepto; card uses a saved card on Blinkit/Zepto; cod works on Blinkit/Zepto/Instamart. New wallet execution is fixture-tested; real debits remain untested.',
+          description: 'auto uses preferences. wallet supports native or linked balances covering the full bill on all apps when balance, selector, applied credit and final control are observable. upi/upi_collect means collect on Blinkit; upi_qr generates a QR on Zepto/BigBasket; BigBasket QR requires no phone number or UPI ID; card uses a saved card on Blinkit/Zepto; cod works on Blinkit/Zepto/Instamart. New wallet execution is fixture-tested; real debits remain untested.',
         },
         upi_id: { type: 'string', description: 'UPI ID (e.g. name@bank); required for payment_method "upi"' },
         card_last4: { type: 'string', description: 'Last 4 digits of the saved card; required for payment_method "card"' },
@@ -1023,7 +1023,7 @@ async function handle(name: string, args: any): Promise<any> {
         if (payment_method === 'upi_collect') payment_method = 'upi';
         const method = String(payment_method ?? '').toLowerCase();
         const allowed = SUPPORTED_PAYMENTS[platformName] ?? [];
-        if (platformName === 'bigbasket' && method !== 'wallet') return say('BigBasket supports only fully covered native or linked wallet execution; other payment execution is deferred. No order was placed.');
+        if (platformName === 'bigbasket' && !['wallet', 'upi_qr'].includes(method)) return say('BigBasket supports UPI QR and fully covered wallets. UPI collect is not offered by the observed checkout. No payment was attempted.');
         if (!allowed.includes(method)) {
           return say(`❌ "${payment_method}" cannot be submitted by the ${platformName} adapter. Supported execution: ${allowed.join(', ')}. Use get_payment_options and prepare_payment for other available methods, then complete them in the app. No automatic fallback or payment was attempted.`);
         }
@@ -1043,7 +1043,7 @@ async function handle(name: string, args: any): Promise<any> {
           orderTokens.set(token, { platform: platformName, method, detail: method === 'wallet' ? wallet_provider : method === 'card' ? card_last4 : method === 'upi' ? upi_id : undefined,
             total: r.total!, expires: Date.now() + 5 * 60_000 });
           const items = preview?.items.map(i => `${i.cartQuantity}x ${i.name}`).join(', ') ?? '';
-          return say(`🛑 **Ready to place — NOT yet ordered.**\n${items}\n**To pay: ₹${r.total} (${method === 'wallet' ? `fully covered by ${wallet_provider}; wallet debit can complete immediately` : method === 'upi' ? `UPI collect request to ${upi_id}; the user approves it on their phone` : method === 'upi_qr' ? 'UPI QR code; the user scans it with any UPI app' : method === 'card' ? `saved card ending ${card_last4}; may ask the user for a bank OTP` : 'Cash on Delivery'})**\nTo place this order, get the user's explicit approval, then call place_order again with the same payment_method${payment_method === 'upi' ? ' and upi_id' : method === 'wallet' ? ' and wallet_provider' : ''} and confirm_token: ${token} (valid 5 min).`);
+          return say(`🛑 **Ready to place — NOT yet ordered.**\n${items}\n**To pay: ₹${r.total} (${method === 'wallet' ? `fully covered by ${wallet_provider}; wallet debit can complete immediately` : method === 'upi' ? `UPI collect request to ${upi_id}; the user approves it on their phone` : method === 'upi_qr' ? 'UPI QR code; no phone number or UPI ID needed; generation may create a pending transaction, then the user scans it with any UPI app' : method === 'card' ? `saved card ending ${card_last4}; may ask the user for a bank OTP` : 'Cash on Delivery'})**\nTo place this order, get the user's explicit approval, then call place_order again with the same payment_method${payment_method === 'upi' ? ' and upi_id' : method === 'wallet' ? ' and wallet_provider' : ''} and confirm_token: ${token} (valid 5 min).`);
         }
 
         const t = orderTokens.get(confirm_token);

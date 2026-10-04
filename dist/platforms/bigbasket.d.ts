@@ -2,6 +2,7 @@ import { BrowserContext, Locator } from 'playwright';
 import { QuickCommercePlatform, LoginStatus, SearchResult, CartSummary, Address, OrderPreview } from './base.js';
 import type { AddOutcome } from '../engine/add-strategy.js';
 export declare class BigBasketPlatform extends QuickCommercePlatform {
+    private qrCheckout;
     private products;
     private addresses;
     private suggestionIds;

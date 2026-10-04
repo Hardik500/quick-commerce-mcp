@@ -1,7 +1,7 @@
 import type { Page, Frame, Locator } from 'playwright';
 import { paymentMethod, paymentOptions, planPayment, type PaymentPlan, type PaymentPreferences, type PaymentOption } from './payments.js';
 
-async function paymentRoot(page: Page): Promise<Page | Frame> {
+export async function paymentRoot(page: Page): Promise<Page | Frame> {
   const frame = page.locator('iframe[name="HyperServices"], iframe[src*="zpaykit"]').first();
   if (await frame.isVisible().catch(() => false)) {
     const content = await (await frame.elementHandle())?.contentFrame();

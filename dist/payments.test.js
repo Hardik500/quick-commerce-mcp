@@ -12,7 +12,7 @@ for (const platform of ['zepto', 'blinkit', 'swiggy-instamart', 'bigbasket']) {
         assert.equal(planPayment(options.filter(o => o.method !== 'upi_collect')).selected?.method, 'upi_qr');
         assert.equal(planPayment(options.filter(o => !o.method.startsWith('upi'))).selected?.method, 'wallet');
         assert.equal(options.find(o => o.method === 'upi_collect')?.execution, platform === 'blinkit' ? 'adapter' : 'manual');
-        assert.equal(options.find(o => o.method === 'upi_qr')?.execution, platform === 'zepto' ? 'adapter' : 'manual');
+        assert.equal(options.find(o => o.method === 'upi_qr')?.execution, ['zepto', 'bigbasket'].includes(platform) ? 'adapter' : 'manual');
     });
 }
 test('generic UPI is inspected before wallet fallback; known QR resolves generic UPI', () => {

@@ -19,6 +19,7 @@ test('fresh MCP exposes payment routing on every app and persists validated scop
     assert.deepEqual(walletSchema.properties.platform.enum, ['zepto', 'swiggy', 'swiggy-instamart', 'blinkit', 'bigbasket']);
     assert.ok(JSON.stringify(wallet.inputSchema).includes('wallet_provider'));
     assert.ok(JSON.stringify(listed.tools.find(t => t.name === 'place_order')!.inputSchema).includes('wallet_provider'));
+    assert.ok(JSON.stringify(listed.tools.find(t => t.name === 'place_order')!.inputSchema).includes('Zepto/BigBasket'));
     for (const name of ['get_payment_options', 'prepare_payment']) {
       const schema = listed.tools.find(t => t.name === name)!.inputSchema as unknown as { properties: { platform: { enum: string[] } } };
       assert.deepEqual(schema.properties.platform.enum, ['zepto', 'swiggy-instamart', 'blinkit', 'bigbasket']);

@@ -1,5 +1,5 @@
 import { paymentMethod, paymentOptions, planPayment } from './payments.js';
-async function paymentRoot(page) {
+export async function paymentRoot(page) {
     const frame = page.locator('iframe[name="HyperServices"], iframe[src*="zpaykit"]').first();
     if (await frame.isVisible().catch(() => false)) {
         const content = await (await frame.elementHandle())?.contentFrame();

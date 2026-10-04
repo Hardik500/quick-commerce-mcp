@@ -1,12 +1,17 @@
 import { QuickCommercePlatform } from './base.js';
 import { ensureSessionDir, sessionPath } from '../session-helper.js';
 import { chmodSync } from 'node:fs';
+import { BigBasketUpiCheckout } from '../bigbasket-upi.js';
+import { preparePaymentPanel } from '../payment-ui.js';
+import { saveQrImage, openQrViewer } from '../session-helper.js';
+import { loadPrefs } from '../preferences.js';
 // Observed on BigBasket's desktop storefront and basket, October 2026.
 const CARD = '[class*="SKUDeck___StyledDiv"]';
 const ROW = 'li[class*="BasketItem___StyledLi"]';
 const PLUS = 'button:has(path[d^="M19 11H13V5"])';
 const SUGGESTION = 'li:has(a[href*="/pd/"][href*="nc=as"])';
 export class BigBasketPlatform extends QuickCommercePlatform {
+    qrCheckout = new BigBasketUpiCheckout(sessionPath('bigbasket').replace('-session.json', '-wallet-attempt.json'));
     products = new Map();
     addresses = [];
     suggestionIds = new Set();
@@ -397,6 +402,24 @@ export class BigBasketPlatform extends QuickCommercePlatform {
     async placeOrder(paymentMethod = 'auto', confirm = false, provider) {
         if (paymentMethod === 'wallet')
             return this.placeWalletOrder(confirm, provider);
+        if (paymentMethod === 'upi_qr') {
+            if (this.qrCheckout.hasPending())
+                return { success: false, message: 'An earlier payment is unresolved. Reconcile it in the app before starting another payment.' };
+            const preview = await this.getOrderPreview();
+            if (!preview || !this.page)
+                return { success: false, message: 'Checkout unavailable; no UPI payment attempted.' };
+            await preparePaymentPanel(this.page, 'bigbasket', preview.paymentMethods, { order: ['upi_qr'], allow_fallback: false });
+            const result = confirm ? await this.qrCheckout.submit(this.page, preview) : await this.qrCheckout.prepare(this.page, preview);
+            if (result.image) {
+                const file = saveQrImage(result.image, preview.cart.total);
+                if (file) {
+                    result.message += ` Full-resolution QR: ${file}.`;
+                    if (loadPrefs().open_qr === 'true')
+                        openQrViewer(file);
+                }
+            }
+            return result;
+        }
         return { success: false, message: 'BigBasket payment execution is deferred. Use get_order_preview to inspect checkout; no order was placed.' };
     }
 }

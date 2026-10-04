@@ -12,7 +12,7 @@ export interface PaymentPreferences {
 export const DEFAULT_PAYMENT_ORDER: PaymentPreference[] = ['upi_collect', 'upi_qr', 'wallet', 'card', 'cod'];
 export const EXECUTABLE_PAYMENTS: Record<string, PaymentMethod[]> = {
   blinkit: ['upi_collect', 'card', 'cod'], zepto: ['upi_qr', 'card', 'cod'],
-  'swiggy-instamart': ['cod'], swiggy: ['cod'], bigbasket: [],
+  'swiggy-instamart': ['cod'], swiggy: ['cod'], bigbasket: ['upi_qr'],
 };
 export interface PaymentOption {
   id: string;

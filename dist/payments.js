@@ -2,7 +2,7 @@ export const PAYMENT_METHODS = ['upi_collect', 'upi_qr', 'wallet', 'card', 'cod'
 export const DEFAULT_PAYMENT_ORDER = ['upi_collect', 'upi_qr', 'wallet', 'card', 'cod'];
 export const EXECUTABLE_PAYMENTS = {
     blinkit: ['upi_collect', 'card', 'cod'], zepto: ['upi_qr', 'card', 'cod'],
-    'swiggy-instamart': ['cod'], swiggy: ['cod'], bigbasket: [],
+    'swiggy-instamart': ['cod'], swiggy: ['cod'], bigbasket: ['upi_qr'],
 };
 export function validatePaymentPreferences(value) {
     if (!value || typeof value !== 'object' || Array.isArray(value))

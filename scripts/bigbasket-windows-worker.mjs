@@ -3,12 +3,30 @@
 import { spawn } from 'node:child_process';
 import { mkdirSync, readFileSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { createInterface } from 'node:readline';
-const [executable, profile] = process.argv.slice(2);
+import { bigBasketBrowserArgs } from '../dist/browser-runtime.js';
+const [executable, profile, mode] = process.argv.slice(2);
+if (!['headless', 'visible', 'background'].includes(mode)) throw new Error('Explicit browser mode required.');
 mkdirSync(profile, { recursive: true });
 try { rmSync(join(profile, 'DevToolsActivePort')); } catch {}
-const chrome = spawn(executable, [`--user-data-dir=${profile}`, '--remote-debugging-port=0',
-  '--remote-debugging-address=127.0.0.1', '--no-first-run', '--no-default-browser-check', 'https://www.bigbasket.com'], { stdio: 'ignore' });
+const args = bigBasketBrowserArgs(profile, mode === 'headless').filter(arg => arg !== 'https://www.bigbasket.com');
+const chrome = mode === 'background'
+  ? spawn(join(process.env.SystemRoot ?? 'C:\\Windows', 'System32/WindowsPowerShell/v1.0/powershell.exe'),
+    ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File',
+      fileURLToPath(new URL('./bigbasket-background-desktop.ps1', import.meta.url)), '-BrowserPath', executable, '-ProfilePath', profile],
+    { stdio: ['ignore', 'pipe', 'inherit'], windowsHide: true })
+  : spawn(executable, [...args, 'about:blank'], { stdio: 'ignore', windowsHide: true });
+let isolated = false;
+const isolatedReady = mode === 'background' ? new Promise((resolve, reject) => {
+  const timer = setTimeout(() => reject(new Error('Isolated browser desktop did not become ready.')), 20000);
+  createInterface({ input: chrome.stdout }).on('line', line => {
+    if (line === '{"kind":"desktop-ready","isolated":true}') { isolated = true; clearTimeout(timer); resolve(); }
+  });
+  chrome.once('exit', () => { clearTimeout(timer); reject(new Error('Isolated browser launcher stopped.')); });
+}) : Promise.resolve();
+// Observe rejection immediately even while polling the browser endpoint.
+isolatedReady.catch(() => {});
 const send = value => process.stdout.write(JSON.stringify(value) + '\n');
 let version;
 for (let attempt = 0; attempt < 150 && !version; attempt++) {
@@ -20,7 +38,8 @@ for (let attempt = 0; attempt < 150 && !version; attempt++) {
   if (!version) await new Promise(resolve => setTimeout(resolve, 100));
 }
 if (!version) throw new Error('Browser did not become ready.');
-send({ kind: 'ready', browser: version.Browser });
+await isolatedReady;
+send({ kind: 'ready', browser: version.Browser, isolated });
 const sockets = new Map();
 for await (const line of createInterface({ input: process.stdin })) {
   const message = JSON.parse(line);

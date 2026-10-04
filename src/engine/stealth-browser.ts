@@ -76,6 +76,11 @@ export class StealthBrowser {
       this.attached = true;
       this.context = this.browser.contexts()[0];
       if (!this.context) throw new Error('Interactive browser did not expose a default context.');
+      // Native CDP attachment does not inherit context viewport options. Apply
+      // the adapter viewport before inspecting desktop layout.
+      if (config.viewport) {
+        for (const page of this.context.pages()) await page.setViewportSize(config.viewport);
+      }
       return this.context;
     }
     if (config.userDataDir) {

@@ -15,6 +15,7 @@ import { StealthBrowser } from './engine/stealth-browser.js';
 import { browserProfilePath, interactiveBrowserEndpoint, ensureSessionDir, sessionPath } from './session-helper.js';
 import { loadPrefs, savePrefs, paymentPreferencesFor } from './preferences.js';
 import { PAYMENT_METHODS, paymentMethod, planPayment, validatePaymentPreferences } from './payments.js';
+import { bigBasketHeadless } from './browser-runtime.js';
 import { singleFlight } from './single-flight.js';
 import { keyedLock } from './keyed-lock.js';
 import { FLOW_STEPS, clearFlow, fingerprint, loadFlows, saveFlow, selfRepair, verifyFlow } from './flows.js';
@@ -483,7 +484,7 @@ const getPlatform = singleFlight(async (name) => {
     }
     const stealth = new StealthBrowser();
     const context = await stealth.launch({
-        headless: name === 'bigbasket' ? process.env.QC_BIGBASKET_HEADLESS === 'true' : true,
+        headless: name === 'bigbasket' ? bigBasketHeadless() : true,
         storageStatePath: sessionPath(name),
         ...(name === 'bigbasket' ? { desktop: true, cdpEndpoint: process.env.QC_BIGBASKET_CDP_URL ?? interactiveBrowserEndpoint(name),
             userDataDir: browserProfilePath(name), viewport: { width: 1280, height: 900 } } : {}),

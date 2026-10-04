@@ -176,11 +176,19 @@ the MCP connection after building; rebuilding files does not update a running
 Node process. `scripts/verify-bigbasket-mcp.mjs` exercises that fresh stdio
 connection (newline-delimited tool requests on stdin, `quit` to close).
 
-BigBasket uses native desktop browser APIs and defaults to a visible dedicated
-profile (`QC_BIGBASKET_HEADLESS=true` opts into headless). Both headless and
-visible WSL browsers failed live login with Access Denied or OTP HTTP 400. The
-working development workaround runs only the browser runtime on Windows and
-keeps the MCP process, project, preferences and session files in WSL:
+BigBasket uses native desktop browser APIs. Direct MCP launch now defaults to
+headless (`QC_BIGBASKET_HEADLESS=false` explicitly enables visible recovery).
+Live Windows and WSL headless tests on 2026-10-04 were rejected by the storefront;
+changing the headless user-agent did not fix this. Login cookies remained valid
+in the normal Windows browser. No new OTP or payment was sent during those tests.
+
+The Windows bridge defaults to **background** mode: ordinary Chrome runs on a
+private Windows desktop that is never switched into view. This is an invisible
+local workaround, **not true headless** and not a cloud/Linux solution. The
+launcher checks that Chrome created its window on that private desktop before
+reporting ready. Live MCP checks verified saved login/address, native search,
+cart contents, and checkout/payment options, including after reconnect/restart.
+The MCP process, project, preferences and session files remain in WSL:
 
 ```bash
 # From WSL, install the Windows browser runtime into the Windows user's home.
@@ -189,19 +197,25 @@ PLAYWRIGHT_HOST_PLATFORM_OVERRIDE=win64 \
   PLAYWRIGHT_BROWSERS_PATH="$WINDOWS_HOME/.quick-commerce-mcp/browser-runtime" \
   npx playwright install chromium
 node scripts/bigbasket-windows-bridge.mjs
+# Explicit recovery or headless experiments:
+QC_BIGBASKET_BROWSER_MODE=visible node scripts/bigbasket-windows-bridge.mjs
+QC_BIGBASKET_BROWSER_MODE=headless node scripts/bigbasket-windows-bridge.mjs
 ```
 
-Keep the bridge running while using MCP. It publishes an owner-only loopback
-endpoint registry for automatic attachment, uses an isolated BigBasket profile,
-and never logs CDP frames or credentials. Optional `QC_WINDOWS_NODE_PATH` and
+Stop the existing bridge before changing modes; one dedicated profile must not
+have competing browser owners. Keep the bridge running while using MCP. It
+publishes an owner-only loopback endpoint registry for automatic attachment and
+never logs CDP frames or credentials. Optional `QC_WINDOWS_NODE_PATH` and
 `QC_WINDOWS_BROWSER_PATH` specify WSL paths to Windows runtime executables;
 the default Node runtime comes from the Codex desktop dependency cache. An
-explicit `QC_BIGBASKET_CDP_URL` must be a plain loopback HTTP origin. This is a
-development helper in this repository, not a bundled npm installation feature.
-MCP disconnect preserves the interactive browser; explicit logout clears its
-cookies, origin storage and cached authenticated pages. Saved WSL session files
-use owner-only permissions. A browser/runtime failure still requires reconnecting
-the MCP client; rebuilding does not refresh an existing client connection.
+explicit `QC_BIGBASKET_CDP_URL` must be a plain loopback HTTP origin. This remains
+a development helper, not a bundled npm installation feature. Claude's local
+MCP connection can attach to it; remote clients cannot attach to your loopback
+browser. Payment dispatch/redirects and fresh OTP login have not been verified
+in background mode. Switch explicitly to visible recovery when the site requires
+human interaction. MCP disconnect preserves the browser; logout clears its
+cookies, origin storage and cached authenticated pages. Session files use
+owner-only permissions. Rebuilding does not refresh an existing MCP process.
 
 ### Payment routing and user preferences (development)
 

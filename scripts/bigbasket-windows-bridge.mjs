@@ -5,6 +5,7 @@ import { fileURLToPath } from 'node:url';
 import { mkdirSync, writeFileSync, readFileSync, rmSync, readdirSync, chmodSync } from 'node:fs';
 import { join } from 'node:path';
 import { browserProfilePath } from '../dist/session-helper.js';
+import { bigBasketBrowserMode } from '../dist/browser-runtime.js';
 import bundle from '../node_modules/playwright-core/lib/utilsBundle.js';
 
 // Only loopback is exposed. No CDP frames, cookies or credentials are logged.
@@ -18,13 +19,16 @@ const windowsNode = process.env.QC_WINDOWS_NODE_PATH ?? join(home, '.cache/codex
 const executable = process.env.QC_WINDOWS_BROWSER_PATH ?? join(runtime, revisions[0], 'chrome-win64/chrome.exe');
 const profile = join(home, '.quick-commerce-mcp/profiles/bigbasket');
 const worker = spawn(windowsNode, [windows(fileURLToPath(new URL('./bigbasket-windows-worker.mjs', import.meta.url))),
-  windows(executable), windows(profile)], { stdio: ['pipe', 'pipe', 'ignore'] });
+  windows(executable), windows(profile), bigBasketBrowserMode()], { stdio: ['pipe', 'pipe', 'ignore'] });
 const connections = new Map(); let next = 1; let ready;
 const started = new Promise(resolve => { ready = resolve; });
 const send = message => worker.stdin.write(JSON.stringify(message) + '\n');
 createInterface({ input: worker.stdout }).on('line', line => {
   const message = JSON.parse(line);
-  if (message.kind === 'ready') ready();
+  if (message.kind === 'ready') {
+    if (bigBasketBrowserMode() === 'background' && !message.isolated) throw new Error('Browser did not verify desktop isolation.');
+    ready();
+  }
   // Diagnostic markers contain no frames or credentials.
   else if (message.kind === 'frame') { const socket = connections.get(message.id); if (socket?.readyState === bundle.ws.OPEN) socket.send(message.data); }
   else if (message.kind === 'close') connections.get(message.id)?.close();
@@ -47,9 +51,9 @@ let endpoint;
 server.listen(0, '127.0.0.1', () => {
   endpoint = `http://127.0.0.1:${server.address().port}`;
   mkdirSync(browserProfilePath('bigbasket'), { recursive: true, mode: 0o700 });
-  writeFileSync(registry, JSON.stringify({ endpoint }), { mode: 0o600 });
+  writeFileSync(registry, JSON.stringify({ endpoint, mode: bigBasketBrowserMode() }), { mode: 0o600 });
   chmodSync(registry, 0o600);
-  console.log('Windows BigBasket browser bridge ready; MCP can attach automatically.');
+  console.log(`Windows BigBasket ${bigBasketBrowserMode()} browser bridge ready; MCP can attach automatically.`);
 });
 let stopping = false;
 function clearRegistry() {

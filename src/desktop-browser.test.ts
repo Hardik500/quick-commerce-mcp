@@ -109,3 +109,22 @@ test('fresh MCP clients launch installed Chromium without a client-specific exec
     else process.env[CHROME_PATH_ENV] = previous;
   }
 });
+
+test('CDP attachment applies a desktop viewport and disconnect preserves the owned browser', async () => {
+  const reservation = createServer();
+  await new Promise<void>(resolve => reservation.listen(0, '127.0.0.1', resolve));
+  const port = (reservation.address() as { port: number }).port;
+  await new Promise<void>(resolve => reservation.close(() => resolve()));
+  const owner = await chromium.launch({ headless: true, args: [`--remote-debugging-port=${port}`] });
+  const attached = new StealthBrowser();
+  try {
+    const protocol = await owner.newBrowserCDPSession();
+    await protocol.send('Target.createTarget', { url: 'about:blank' });
+    const context = await attached.launch({ desktop: true, cdpEndpoint: `http://127.0.0.1:${port}`, viewport: { width: 1280, height: 900 } });
+    const page = context.pages()[0];
+    assert.deepEqual(await page.evaluate(() => ({ width: innerWidth, height: innerHeight })), { width: 1280, height: 900 });
+    await attached.close();
+    assert.equal(owner.isConnected(), true);
+    assert.ok((await protocol.send('Target.getTargets')).targetInfos.some(t => t.type === 'page'));
+  } finally { await attached.close(); await owner.close(); }
+});

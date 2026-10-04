@@ -176,7 +176,7 @@ If MCP is connected, you'll see results from the platform searches.
 
 ### Browser visibility with Claude and other clients
 
-Browser automation runs in the local MCP server process, independently of the client UI. Zepto, Blinkit and Instamart normally launch headless browsers. BigBasket currently uses a dedicated visible Windows browser bridge when its headless login or listing requests are blocked. The bridge is a separate local setup step; it is not automatically launched by Claude and is not bundled in the published package. A cloud-hosted MCP deployment cannot attach to this local browser. Headless BigBasket operation has not been verified for this account. See [AUTHENTICATION.md](AUTHENTICATION.md) for the interactive setup.
+Browser automation runs in the local MCP server process, independently of the client UI. Zepto, Blinkit and Instamart normally launch headless browsers. BigBasket currently rejects true headless browsing for the tested account. Its Windows bridge defaults to an invisible background mode: normal Chrome runs on an isolated Windows desktop. This is not true headless, but live saved-login, search, cart and checkout checks work without a browser window on the user desktop. Use `QC_BIGBASKET_BROWSER_MODE=visible` for explicit login recovery, or `headless` for experiments. The bridge is a separate local setup step; it is not automatically launched by Claude and is not bundled in the published package. A cloud-hosted MCP deployment cannot attach to this local browser. True headless BigBasket tests were blocked; background payment submission and fresh OTP login remain unverified. See [AUTHENTICATION.md](AUTHENTICATION.md) for the interactive setup.
 
 
 ### MCP not appearing in client

@@ -1,0 +1,1 @@
+{"version":3,"file":"browser-runtime.d.ts","sourceRoot":"","sources":["../src/browser-runtime.ts"],"names":[],"mappings":"AAAA,4EAA4E;AAC5E,wBAAgB,iBAAiB,CAAC,KAAK,qBAAoC,GAAG,OAAO,CAIpF;AAED,wBAAgB,oBAAoB,CAAC,OAAO,EAAE,MAAM,EAAE,QAAQ,EAAE,OAAO,GAAG,MAAM,EAAE,CAIjF;AAED,wBAAgB,oBAAoB,CAAC,KAAK,qBAAwC,GAAG,UAAU,GAAG,YAAY,GAAG,SAAS,CAIzH"}

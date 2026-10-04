@@ -99,8 +99,10 @@ async function qrGraphics(page) {
     for (const graphic of await root.locator('img[alt*="qr" i], img[src^="data:image/"], canvas').all()) {
         if (!await graphic.isVisible())
             continue;
-        const box = await graphic.boundingBox();
-        if (box && box.width >= 120 && box.height >= 120 && Math.abs(box.width / box.height - 1) < 0.2)
+        const size = await graphic.evaluate(element => element instanceof HTMLImageElement
+            ? { width: element.naturalWidth, height: element.naturalHeight }
+            : element instanceof HTMLCanvasElement ? { width: element.width, height: element.height } : undefined);
+        if (size && size.width >= 120 && size.height >= 120 && Math.abs(size.width / size.height - 1) < 0.2)
             graphics.push(graphic);
     }
     return graphics;

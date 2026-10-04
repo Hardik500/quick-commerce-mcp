@@ -4,7 +4,7 @@ import { chromium, type Browser } from 'playwright';
 import { mkdtempSync, rmSync, statSync, readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { BigBasketUpiCheckout } from './bigbasket-upi.js';
+import { BigBasketUpiCheckout, readBigBasketQr } from './bigbasket-upi.js';
 import type { OrderPreview } from './platforms/base.js';
 import { WalletCheckout } from './wallet.js';
 
@@ -98,5 +98,19 @@ test('an existing QR is not reused or regenerated without reconciliation', async
     assert.equal((await checkout.prepare(page, preview())).ready, undefined);
     assert.equal((await checkout.submit(page, preview())).submitted, false);
     assert.equal(await page.frames()[1].evaluate(() => Boolean((window as unknown as { clicks?: number }).clicks)), false);
+  } finally { await page.close(); }
+});
+
+
+test('responsive display stretching does not prevent decoding the original GIF pixels', async () => {
+  const page = await fixture();
+  try {
+    await page.frames()[1].getByRole('button').click(); // Local fixture only; no merchant/payment requests.
+    await page.frames()[1].locator('img').evaluate(e => { e.style.width = '142px'; e.style.height = '210px'; });
+    const result = await readBigBasketQr(page, 108);
+    assert.equal(result.details.amount, 108);
+    assert.equal(result.details.width, 210);
+    assert.equal(result.details.height, 210);
+    assert.match(result.expiry, /09:59/);
   } finally { await page.close(); }
 });

@@ -42,3 +42,33 @@ test('fresh MCP exposes payment routing on every app and persists validated scop
     assert.deepEqual(JSON.parse((await call({})).value).preferences.order, ['upi_collect', 'upi_qr', 'wallet', 'card', 'cod']);
   } finally { await client.close(); rmSync(home, { recursive: true, force: true }); }
 });
+
+
+test('MCP process restart preserves preferences and supports a fresh client handshake', async () => {
+  const home = mkdtempSync(join(tmpdir(), 'qc-mcp-restart-'));
+  try {
+    for (let attempt = 0; attempt < 2; attempt++) {
+      const client = new Client({ name: 'restart-integration-test', version: '1.0.0' }, { capabilities: {} });
+      const transport = new StdioClientTransport({ command: process.execPath, args: ['dist/index.js'],
+        env: { ...process.env, HOME: home }, stderr: 'ignore' });
+      try {
+        await client.connect(transport);
+        assert.equal(client.getServerCapabilities()?.tools !== undefined, true);
+        await client.ping();
+        assert.ok((await client.listTools()).tools.some(t => t.name === 'get_wallet_status'));
+        const result = await client.callTool({ name: 'set_payment_preferences', arguments: attempt === 0
+          ? { platform: 'bigbasket', order: ['wallet', 'upi_qr'], wallet_provider: 'Amazon Pay', allow_fallback: false }
+          : { platform: 'bigbasket' } });
+        assert.notEqual(result.isError, true);
+        const content = result.content as Array<{ type: string; text?: string }>;
+        const saved = JSON.parse(content[0].text!).preferences;
+        assert.deepEqual(saved.order, ['wallet', 'upi_qr']);
+        assert.equal(saved.wallet_provider, 'Amazon Pay');
+        assert.equal(saved.allow_fallback, false);
+        const invalid = await client.callTool({ name: 'nonexistent_tool', arguments: {} });
+        assert.equal(invalid.isError, true);
+        await client.ping(); // A rejected tool call must not close the transport.
+      } finally { await client.close(); }
+    }
+  } finally { rmSync(home, { recursive: true, force: true }); }
+});

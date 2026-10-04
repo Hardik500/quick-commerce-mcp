@@ -441,12 +441,14 @@ This is a personal project. Open to suggestions!
 Use Node.js 24, run `npm ci`, and install fixture browsers with
 `npx playwright install chromium`. Run `npm run setup:hooks` once per checkout.
 The pre-commit hook runs `npm run check` (the full test suite, lint, and browser
-helper syntax checks), refuses unstaged code changes, and checks that generated
+helper syntax checks, and the high-severity dependency audit), refuses unstaged
+code changes, and checks that generated
 `dist/` files are staged. GitHub Actions runs the same checks on pushes and pull
 requests using the committed dependency lockfile.
 
 Tests cover cart persistence and rejected writes, OTP/session restoration,
-saved-address selection, payment preferences and category navigation, and native
+saved-address selection, MCP reconnect/handshake and preference persistence,
+payment preferences and category navigation, and native
 and linked wallet preparation/confirmation across all four platforms. They use
 local browser fixtures and never charge a real account. Live payment execution
 still requires separate verification; passing fixtures do not establish support

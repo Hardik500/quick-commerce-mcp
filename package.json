@@ -24,7 +24,7 @@
     "lint": "eslint src/",
     "clean": "rm -rf dist/",
     "prepublishOnly": "npm test",
-    "check": "npm test && npm run lint && node --check scripts/bigbasket-windows-bridge.mjs && node --check scripts/bigbasket-windows-worker.mjs && node --check scripts/open-bigbasket-browser.mjs && node --check scripts/verify-bigbasket-mcp.mjs",
+    "check": "npm test && npm run lint && node --check scripts/bigbasket-windows-bridge.mjs && node --check scripts/bigbasket-windows-worker.mjs && node --check scripts/open-bigbasket-browser.mjs && node --check scripts/verify-bigbasket-mcp.mjs && npm audit --audit-level=high",
     "setup:hooks": "git config core.hooksPath .githooks"
   },
   "keywords": [
@@ -39,7 +39,7 @@
   "author": "Hardik Khandelwal <hardikkhandelwal500@gmail.com>",
   "license": "MIT",
   "dependencies": {
-    "@modelcontextprotocol/sdk": "^0.5.0",
+    "@modelcontextprotocol/sdk": "^1.32.0",
     "playwright": "^1.41.0",
     "playwright-stealth": "^0.0.1"
   },

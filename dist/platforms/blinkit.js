@@ -842,6 +842,8 @@ export class BlinkitPlatform extends QuickCommercePlatform {
     async placeOrder(paymentMethod, confirm = false, upiId) {
         if (!this.page)
             throw new Error('Platform not initialized');
+        if (paymentMethod === 'wallet')
+            return this.placeWalletOrder(confirm, upiId);
         if (paymentMethod === 'upi')
             return this.placeUpiOrder(confirm, upiId);
         if (paymentMethod === 'card')

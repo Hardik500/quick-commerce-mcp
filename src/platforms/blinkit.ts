@@ -882,6 +882,7 @@ export class BlinkitPlatform extends QuickCommercePlatform {
   // detail = UPI ID for 'upi', last 4 digits of a saved card for 'card'.
   async placeOrder(paymentMethod: string, confirm = false, upiId?: string): Promise<any> {
     if (!this.page) throw new Error('Platform not initialized');
+    if (paymentMethod === 'wallet') return this.placeWalletOrder(confirm, upiId);
     if (paymentMethod === 'upi') return this.placeUpiOrder(confirm, upiId);
     if (paymentMethod === 'card') return this.placeCardOrder(confirm, upiId);
     if (paymentMethod !== 'cod') return { success: false, message: 'Only "cod", "upi" and "card" are supported on Blinkit.' };

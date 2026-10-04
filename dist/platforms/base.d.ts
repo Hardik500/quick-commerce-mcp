@@ -4,6 +4,8 @@
  */
 import { BrowserContext, Locator, Page } from 'playwright';
 import { AddOutcome } from '../engine/add-strategy.js';
+import type { PaymentPreferences } from '../payments.js';
+import { type WalletOrderResult } from '../wallet.js';
 export interface Product {
     id: string;
     name: string;
@@ -34,6 +36,8 @@ export interface CartSummary {
     deliverySlot?: string;
     /** Store closed / unserviceable banner, when the platform shows one. */
     notice?: string;
+    /** Informational caveat; unlike notice, this does not block checkout. */
+    information?: string;
 }
 export interface SearchResult {
     query: string;
@@ -41,6 +45,8 @@ export interface SearchResult {
     products: Product[];
     totalResults: number;
     error?: string;
+    /** Limited native suggestion results are not an exhaustive catalog search. */
+    information?: string;
 }
 export interface Address {
     id: string;
@@ -81,6 +87,7 @@ export declare abstract class QuickCommercePlatform {
     protected context: BrowserContext | null;
     protected page: Page | null;
     protected isLoggedIn: boolean;
+    private walletCheckout;
     private productQueries;
     /** Keep IDs usable after cart/address reads navigate away from search. */
     protected rememberSearch(query: string, products: Product[]): void;
@@ -230,10 +237,34 @@ export declare abstract class QuickCommercePlatform {
      * Select delivery address by id from getAddresses().
      */
     selectAddress(addressId: string, retried?: boolean): Promise<boolean>;
+    protected rememberAddress(address: Address): void;
+    /** Reuse a confirmed choice, or select the sole saved address for this area.
+     * Ambiguous or missing matches stay visible to the caller for a user choice. */
+    resolveDeliveryAddress(): Promise<{
+        addresses: Address[];
+        selected?: Address;
+    }>;
     /**
      * Get final order preview (before payment)
      */
     abstract getOrderPreview(): Promise<OrderPreview | null>;
+    getPaymentOptions(): Promise<{
+        preview: OrderPreview;
+        options: import("../payments.js").PaymentOption[];
+        wallet: import("../wallet.js").WalletStatus;
+    }>;
+    getWalletStatus(provider?: string): Promise<{
+        preview: OrderPreview;
+        wallet: import("../wallet.js").WalletStatus;
+        wallets: import("../wallet.js").WalletStatus[];
+    }>;
+    placeWalletOrder(confirm?: boolean, provider?: string): Promise<WalletOrderResult>;
+    preparePayment(preferences: PaymentPreferences, optionId?: string): Promise<{
+        plan: import("../payments.js").PaymentPlan;
+        opened: boolean;
+        message: string;
+        preview: OrderPreview;
+    }>;
     /** Text of the most recent order (status, items, total), or null if unsupported/none. */
     getLatestOrder(): Promise<string | null>;
     /**

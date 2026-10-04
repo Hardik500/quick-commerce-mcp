@@ -26,6 +26,7 @@ const PLATFORM_URLS = {
     swiggy: 'https://www.swiggy.com/instamart',
     'swiggy-instamart': 'https://www.swiggy.com/instamart',
     blinkit: 'https://www.blinkit.com',
+    bigbasket: 'https://www.bigbasket.com',
 };
 /** Canonical session file name for a platform (aliases collapse to one file). */
 function canonicalPlatform(platform) {
@@ -33,11 +34,29 @@ function canonicalPlatform(platform) {
 }
 export function ensureSessionDir() {
     if (!fs.existsSync(SESSION_DIR)) {
-        fs.mkdirSync(SESSION_DIR, { recursive: true });
+        fs.mkdirSync(SESSION_DIR, { recursive: true, mode: 0o700 });
     }
+    fs.chmodSync(SESSION_DIR, 0o700);
 }
 export function sessionPath(platform) {
     return path.join(SESSION_DIR, `${canonicalPlatform(platform)}-session.json`);
+}
+export function browserProfilePath(platform) {
+    const name = canonicalPlatform(platform);
+    if (!PLATFORM_URLS[name])
+        throw new Error('Unknown platform profile.');
+    return path.join(os.homedir(), '.quick-commerce-mcp', 'profiles', name);
+}
+/** The browser bridge publishes only its loopback endpoint, never credentials. */
+export function interactiveBrowserEndpoint(platform) {
+    try {
+        const record = JSON.parse(fs.readFileSync(path.join(browserProfilePath(platform), 'interactive-endpoint.json'), 'utf8'));
+        const url = new URL(record.endpoint);
+        if (url.protocol === 'http:' && ['127.0.0.1', 'localhost', '[::1]'].includes(url.hostname) && !url.username && !url.password && url.pathname === '/' && !url.search && !url.hash)
+            return url.href;
+    }
+    catch { /* no interactive browser registered */ }
+    return undefined;
 }
 /**
  * Screenshot options for general page captures: small enough to sit inside the
@@ -166,6 +185,8 @@ export async function interactiveLogin(platform) {
         headless: false,
         slowMo: 200,
         storageStatePath: fs.existsSync(savedSession) ? savedSession : undefined,
+        ...(platform === 'bigbasket' ? { desktop: true, cdpEndpoint: interactiveBrowserEndpoint(platform),
+            userDataDir: browserProfilePath(platform), viewport: { width: 1280, height: 900 } } : {}),
     });
     const page = await context.newPage();
     console.log(`📱 Navigating to ${url}...`);

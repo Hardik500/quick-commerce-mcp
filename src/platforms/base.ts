@@ -5,6 +5,11 @@
 import { BrowserContext, Locator, Page } from 'playwright';
 import { pick } from '../flows.js';
 import { AddOutcome, blockedBy, nextAddAction } from '../engine/add-strategy.js';
+import { loadPrefs, savePrefs, preferredAddress } from '../preferences.js';
+import { inspectPayments, preparePaymentPanel } from '../payment-ui.js';
+import type { PaymentPreferences } from '../payments.js';
+import { inspectWallet, inspectWallets, WalletCheckout, type WalletOrderResult } from '../wallet.js';
+import { sessionPath } from '../session-helper.js';
 
 /**
  * How long to wait for a dispatched click to show up on the card.
@@ -44,6 +49,8 @@ export interface CartSummary {
   deliverySlot?: string;
   /** Store closed / unserviceable banner, when the platform shows one. */
   notice?: string;
+  /** Informational caveat; unlike notice, this does not block checkout. */
+  information?: string;
 }
 
 export interface SearchResult {
@@ -52,6 +59,8 @@ export interface SearchResult {
   products: Product[];
   totalResults: number;
   error?: string;
+  /** Limited native suggestion results are not an exhaustive catalog search. */
+  information?: string;
 }
 
 export interface Address {
@@ -96,6 +105,7 @@ export abstract class QuickCommercePlatform {
   protected context: BrowserContext | null = null;
   protected page: Page | null = null;
   protected isLoggedIn: boolean = false;
+  private walletCheckout: WalletCheckout;
   private productQueries = new Map<string, { query: string; name: string }>();
 
   /** Keep IDs usable after cart/address reads navigate away from search. */
@@ -139,6 +149,7 @@ export abstract class QuickCommercePlatform {
   constructor(name: string, baseUrl: string) {
     this.name = name;
     this.baseUrl = baseUrl;
+    this.walletCheckout = new WalletCheckout(sessionPath(name).replace('-session.json', '-wallet-attempt.json'));
   }
 
   /**
@@ -430,7 +441,7 @@ export abstract class QuickCommercePlatform {
   async selectAddress(addressId: string, retried = false): Promise<boolean> {
     if (!this.page) return false;
     try {
-      const target = (await this.getAddresses())[Number(addressId)];
+      const target = (await this.getAddresses()).find(a => a.id === addressId);
       if (!target) return false;
       const cards = await this.openAddressPicker();
       // Match by text, not position: card order changes with the current location.
@@ -438,7 +449,8 @@ export abstract class QuickCommercePlatform {
       if ((await card.count()) === 0) return false;
       await card.click();
       // Picker closes once the address is applied.
-      await cards.first().waitFor({ state: 'hidden', timeout: 10000 }).catch(() => {});
+      await cards.first().waitFor({ state: 'hidden', timeout: 10000 });
+      this.rememberAddress(target);
       return true;
     } catch (error) {
       // Picker clicks are flaky on the mobile viewport ("outside of the viewport"); retry once.
@@ -448,10 +460,57 @@ export abstract class QuickCommercePlatform {
     }
   }
 
+  protected rememberAddress(address: Address): void {
+    const prefs = loadPrefs();
+    savePrefs({ selected_addresses: { ...prefs.selected_addresses,
+      [this.name]: { label: address.label, addressLine1: address.addressLine1, pincode: address.pincode },
+    } });
+  }
+
+  /** Reuse a confirmed choice, or select the sole saved address for this area.
+   * Ambiguous or missing matches stay visible to the caller for a user choice. */
+  async resolveDeliveryAddress(): Promise<{ addresses: Address[]; selected?: Address }> {
+    const addresses = await this.getAddresses();
+    const prefs = loadPrefs();
+    const target = preferredAddress(addresses, prefs.pincode, prefs.selected_addresses?.[this.name]);
+    if (target && await this.selectAddress(target.id)) return { addresses, selected: target };
+    return { addresses };
+  }
+
   /**
    * Get final order preview (before payment)
    */
   abstract getOrderPreview(): Promise<OrderPreview | null>;
+
+  async getPaymentOptions() {
+    const preview = await this.getOrderPreview();
+    if (!preview || !this.page) throw new Error('Checkout unavailable. Resolve cart, login and address before choosing payment.');
+    const options = await inspectPayments(this.page, this.name, preview.paymentMethods);
+    const wallet = await inspectWallet(this.page, this.name, preview.cart.total);
+    if (wallet.provider) options.push({ id: `wallet:native:${wallet.provider.toLowerCase()}`, method: 'wallet', label: wallet.provider,
+      enabled: wallet.status === 'ready', execution: wallet.status === 'ready' ? 'adapter' : 'manual', balanceVerifiedWallet: true });
+    return { preview, options, wallet };
+  }
+
+  async getWalletStatus(provider?: string) {
+    const preview = await this.getOrderPreview();
+    if (!preview || !this.page) throw new Error('Checkout unavailable. Resolve cart, login and address first.');
+    await preparePaymentPanel(this.page, this.name, preview.paymentMethods, { order: ['wallet'], wallet_provider: provider });
+    const wallet = await inspectWallet(this.page, this.name, preview.cart.total, provider);
+    return { preview, wallet, wallets: await inspectWallets(this.page, this.name, preview.cart.total) };
+  }
+
+  async placeWalletOrder(confirm = false, provider?: string): Promise<WalletOrderResult> {
+    const { preview } = await this.getWalletStatus(provider);
+    if (!this.page) return { success: false, message: 'Checkout unavailable; no wallet payment attempted.' };
+    return confirm ? this.walletCheckout.submit(this.page, this.name, preview, provider) : this.walletCheckout.prepare(this.page, this.name, preview, provider);
+  }
+
+  async preparePayment(preferences: PaymentPreferences, optionId?: string) {
+    const preview = await this.getOrderPreview();
+    if (!preview || !this.page) throw new Error('Checkout unavailable. Resolve cart, login and address before preparing payment.');
+    return { preview, ...await preparePaymentPanel(this.page, this.name, preview.paymentMethods, preferences, optionId) };
+  }
 
   /** Text of the most recent order (status, items, total), or null if unsupported/none. */
   async getLatestOrder(): Promise<string | null> { return null; }
@@ -468,7 +527,8 @@ export abstract class QuickCommercePlatform {
   private static readonly PAYMENT_LABELS = [
     'Google Pay', 'GPay', 'PhonePe', 'Paytm', 'BHIM', 'CRED', 'Amazon Pay', 'Mobikwik',
     'LazyPay', 'Pluxee', 'Netbanking', 'Net Banking', 'Cash on Delivery', 'Pay on Delivery',
-    'Add New Card', 'Add credit or debit cards', 'Navi', 'Pay via QR Code', 'Pay Later', 'UPI',
+    'Add New Card', 'Add credit or debit cards', 'Credit/Debit Card', 'Cards', 'Wallets',
+    'Navi', 'Pay via QR Code', 'Pay Later', 'UPI', 'Enter UPI ID',
   ];
 
   protected scanPaymentMethods(text: string): string[] {

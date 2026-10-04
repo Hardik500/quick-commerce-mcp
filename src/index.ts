@@ -14,10 +14,12 @@ import {
 import { ZeptoPlatform } from './platforms/zepto.js';
 import { SwiggyInstamartPlatform } from './platforms/swiggy-instamart.js';
 import { BlinkitPlatform } from './platforms/blinkit.js';
+import { BigBasketPlatform } from './platforms/bigbasket.js';
 import { QuickCommercePlatform, Product, SearchResult } from './platforms/base.js';
 import { StealthBrowser } from './engine/stealth-browser.js';
-import { sessionPath } from './session-helper.js';
-import { loadPrefs, savePrefs } from './preferences.js';
+import { browserProfilePath, interactiveBrowserEndpoint, ensureSessionDir, sessionPath } from './session-helper.js';
+import { loadPrefs, savePrefs, paymentPreferencesFor } from './preferences.js';
+import { PAYMENT_METHODS, paymentMethod, planPayment, validatePaymentPreferences } from './payments.js';
 import { singleFlight } from './single-flight.js';
 import { keyedLock } from './keyed-lock.js';
 import { FLOW_STEPS, clearFlow, fingerprint, loadFlows, saveFlow, selfRepair, verifyFlow } from './flows.js';
@@ -37,8 +39,20 @@ function feeLines(cart: { fees?: { label: string; amount: number }[]; deliveryFe
   return fees.map(f => `${f.label}: ₹${f.amount}\n`).join('');
 }
 
+async function deliveryAddressPrompt(platform: QuickCommercePlatform): Promise<string> {
+  try {
+    const { addresses, selected } = await platform.resolveDeliveryAddress();
+    if (selected) return `\n\nDelivery address: ${selected.label}: ${selected.addressLine1}. This choice is saved for ${platform.getName()}.`;
+    if (!addresses.length) return '\n\nNo saved delivery addresses were found. Check the address picker in the app before adding items.';
+    return '\n\nAsk the user to choose their delivery address, then call select_address. The confirmed choice will be saved for this app:\n' +
+      addresses.map(a => `[${a.id}] ${a.label}: ${a.addressLine1}`).join('\n');
+  } catch {
+    return '\n\nCould not read saved addresses. Call list_addresses and ask the user to choose before adding items.';
+  }
+}
+
 // All platforms supported by the "all" shorthand in tool inputs.
-const ALL_PLATFORMS = ['zepto', 'swiggy-instamart', 'blinkit'];
+const ALL_PLATFORMS = ['zepto', 'swiggy-instamart', 'blinkit', 'bigbasket'];
 
 /**
  * This server's version, read from package.json rather than written here.
@@ -93,18 +107,19 @@ const browsers: Map<string, StealthBrowser> = new Map();
 const platformLocks = keyedLock();
 
 // One-time confirm tokens for place_order (step 2 must present the token from step 1).
-const orderTokens: Map<string, { platform: string; total: number; expires: number }> = new Map();
+const orderTokens: Map<string, { platform: string; method: string; detail?: string; total: number; expires: number }> = new Map();
 
 // Payment modes place_order can drive, per platform. Anything else gets a friendly refusal.
 const SUPPORTED_PAYMENTS: Record<string, string[]> = {
-  blinkit: ['cod', 'upi', 'card'],
-  zepto: ['cod', 'upi_qr', 'card'],
-  swiggy: ['cod'],
-  'swiggy-instamart': ['cod'],
+  bigbasket: ['wallet'],
+  blinkit: ['cod', 'upi', 'card', 'wallet'],
+  zepto: ['cod', 'upi_qr', 'card', 'wallet'],
+  swiggy: ['cod', 'wallet'],
+  'swiggy-instamart': ['cod', 'wallet'],
 };
 
 /** Asked right after login: tells the agent to collect the payment mode (and UPI ID) up front. */
-const PAYMENT_PROMPT = '\n\n💳 Before ordering, ask the user how they want to pay and tell them what is supported:\n- Cash on Delivery ("cod"): Blinkit, Zepto, Instamart\n- UPI collect request ("upi", needs their UPI ID like name@bank; approved on their phone): Blinkit only\n- UPI QR ("upi_qr", the user scans a QR we send, valid ~3 min): Zepto only\n- Saved card ("card", needs the last 4 digits of a saved card; CVV is read from the QC_CVV_<last4> env var on the server): Zepto, Blinkit\n- New cards, wallets, netbanking, Pay Later: not supported.\nIf they choose UPI, ask for the UPI ID now. If they choose a card, ask which saved card (last 4 digits).';
+const PAYMENT_PROMPT = '\n\n💳 Use get_payment_options to inspect this cart and apply saved payment preferences. Default priority: UPI collect or QR, wallet, card, then COD. Use set_payment_preferences for global/per-app priority and provider details. prepare_payment opens safe payment categories without submitting. Some flows require completion in the app; the options response identifies these. Never switch methods automatically after a payment attempt. Ask for explicit approval before place_order confirmation.';
 
 /**
  * Part of the same ask, because Blinkit demands a delivery location *before*
@@ -122,7 +137,7 @@ const PINCODE_ASK =
 const TOOLS: Tool[] = [
   {
     name: 'search_products',
-    description: 'Search for products across quick commerce platforms (Zepto, Swiggy Instamart, Blinkit). When multiple platforms return results, includes a cheapest-first comparison by unit price. Uses each platform\'s current delivery address (see list_addresses / select_address).',
+    description: 'Search for products across quick commerce platforms (Zepto, Swiggy Instamart, Blinkit, BigBasket). When multiple platforms return results, includes a cheapest-first comparison by unit price. Uses each platform\'s current delivery address (see list_addresses / select_address).',
     inputSchema: {
       type: 'object',
       properties: {
@@ -132,7 +147,7 @@ const TOOLS: Tool[] = [
         },
         platforms: {
           type: 'array',
-          items: { type: 'string', enum: ['zepto', 'swiggy', 'swiggy-instamart', 'blinkit', 'all'] },
+          items: { type: 'string', enum: ['zepto', 'swiggy', 'swiggy-instamart', 'blinkit', 'bigbasket', 'all'] },
           description: 'Platforms to search on. Use "all" to search all supported platforms.',
         },
       },
@@ -147,7 +162,7 @@ const TOOLS: Tool[] = [
       properties: {
         platforms: {
           type: 'array',
-          items: { type: 'string', enum: ['zepto', 'swiggy', 'swiggy-instamart', 'blinkit', 'all'] },
+          items: { type: 'string', enum: ['zepto', 'swiggy', 'swiggy-instamart', 'blinkit', 'bigbasket', 'all'] },
           description: 'Platforms to check login status',
         },
       },
@@ -162,7 +177,7 @@ const TOOLS: Tool[] = [
       properties: {
         platform: {
           type: 'string',
-          enum: ['zepto', 'swiggy', 'swiggy-instamart', 'blinkit'],
+          enum: ['zepto', 'swiggy', 'swiggy-instamart', 'blinkit', 'bigbasket'],
           description: 'Platform to submit OTP for',
         },
         otp: {
@@ -179,7 +194,7 @@ const TOOLS: Tool[] = [
     inputSchema: {
       type: 'object',
       properties: {
-        platform: { type: 'string', enum: ['zepto', 'swiggy', 'swiggy-instamart', 'blinkit'], description: 'Platform to search' },
+        platform: { type: 'string', enum: ['zepto', 'swiggy', 'swiggy-instamart', 'blinkit', 'bigbasket'], description: 'Platform to search' },
         queries: { type: 'array', items: { type: 'string' }, description: 'Items the user wants' },
       },
       required: ['platform', 'queries'],
@@ -193,7 +208,7 @@ const TOOLS: Tool[] = [
       properties: {
         platform: {
           type: 'string',
-          enum: ['zepto', 'swiggy', 'swiggy-instamart', 'blinkit'],
+          enum: ['zepto', 'swiggy', 'swiggy-instamart', 'blinkit', 'bigbasket'],
           description: 'Platform to add items to',
         },
         items: {
@@ -225,7 +240,7 @@ const TOOLS: Tool[] = [
       properties: {
         platform: {
           type: 'string',
-          enum: ['zepto', 'swiggy', 'swiggy-instamart', 'blinkit'],
+          enum: ['zepto', 'swiggy', 'swiggy-instamart', 'blinkit', 'bigbasket'],
           description: 'Platform to get cart from',
         },
       },
@@ -234,28 +249,37 @@ const TOOLS: Tool[] = [
   },
   {
     name: 'place_order',
-    description: 'Order the current cart. Two steps: call without confirm_token to get a summary + token (nothing is charged); call again with that token to place the order. ONLY pass the token after the user has explicitly approved the summary. Always pass payment_method explicitly rather than relying on the saved default - the default is one value for every platform, and the same string means different things on different ones (notably "upi" is Blinkit-only, and Zepto needs "upi_qr").',
+    description: 'Order the current cart in two steps. Without confirm_token, prepare an adapter-supported method and return a summary/token; with the same method/details and token, submit only after explicit user approval. Omit payment_method or use auto to apply global/per-app priority to observed options. Unsupported flows require prepare_payment/manual completion. Never retry or switch methods after an uncertain payment.',
     inputSchema: {
       type: 'object',
       properties: {
-        platform: { type: 'string', enum: ['zepto', 'swiggy', 'swiggy-instamart', 'blinkit'], description: 'Platform to order on' },
+        platform: { type: 'string', enum: ['zepto', 'swiggy', 'swiggy-instamart', 'blinkit', 'bigbasket'], description: 'Platform to order on' },
         payment_method: {
           type: 'string',
-          description: 'Required, and always pass it explicitly. "cod" - Cash on Delivery, all platforms. "upi_qr" - Zepto only; returns a payment QR the user scans, valid a few minutes, and leaves the order pending until they pay. "upi" - Blinkit only; sends a collect request to upi_id that the user approves on their phone. "card" - Zepto and Blinkit; saved card, pass card_last4. An unsupported value is refused with the list that platform does support.',
+          description: 'auto uses preferences. wallet supports native or linked balances covering the full bill on all apps when balance, selector, applied credit and final control are observable. upi/upi_collect means collect on Blinkit; upi_qr generates a QR on Zepto; card uses a saved card on Blinkit/Zepto; cod works on Blinkit/Zepto/Instamart. New wallet execution is fixture-tested; real debits remain untested.',
         },
         upi_id: { type: 'string', description: 'UPI ID (e.g. name@bank); required for payment_method "upi"' },
         card_last4: { type: 'string', description: 'Last 4 digits of the saved card; required for payment_method "card"' },
+        wallet_provider: { type: 'string', description: 'Native or linked wallet name with a visible balance and selection control. Wallet must cover the full bill; authentication, linking, top-ups and split payments remain manual.' },
         confirm_token: { type: 'string', description: 'Token returned by step 1; places the order' },
       },
-      required: ['platform', 'payment_method'],
+      required: ['platform'],
     },
+  },
+  {
+    name: 'get_wallet_status',
+    description: 'Inspect native and linked wallet balances against the full checkout bill, opening only the safe Wallets category. Does not apply credit, top up, authenticate or place an order. Unknown/provider-only controls remain manual.',
+    inputSchema: { type: 'object', properties: {
+      platform: { type: 'string', enum: ['zepto', 'swiggy', 'swiggy-instamart', 'blinkit', 'bigbasket'] },
+      wallet_provider: { type: 'string' },
+    }, required: ['platform'] },
   },
   {
     name: 'get_order_status',
     description: 'Show the most recent order (status, items, total) from order history. Read-only. Supported on Blinkit and Zepto (not yet Instamart).',
     inputSchema: {
       type: 'object',
-      properties: { platform: { type: 'string', enum: ['zepto', 'swiggy', 'swiggy-instamart', 'blinkit'], description: 'Platform to check' } },
+      properties: { platform: { type: 'string', enum: ['zepto', 'swiggy', 'swiggy-instamart', 'blinkit', 'bigbasket'], description: 'Platform to check' } },
       required: ['platform'],
     },
   },
@@ -267,7 +291,7 @@ const TOOLS: Tool[] = [
       properties: {
         platform: {
           type: 'string',
-          enum: ['zepto', 'swiggy', 'swiggy-instamart', 'blinkit'],
+          enum: ['zepto', 'swiggy', 'swiggy-instamart', 'blinkit', 'bigbasket'],
           description: 'Platform to preview checkout on',
         },
       },
@@ -305,7 +329,7 @@ const TOOLS: Tool[] = [
       properties: {
         platform: {
           type: 'string',
-          enum: ['zepto', 'swiggy', 'swiggy-instamart', 'blinkit'],
+          enum: ['zepto', 'swiggy', 'swiggy-instamart', 'blinkit', 'bigbasket'],
           description: 'Platform to remove the item from',
         },
         item: { type: 'string', description: 'Item name as shown in get_cart_summary, e.g. "Amul Taaza Toned Milk"' },
@@ -319,7 +343,7 @@ const TOOLS: Tool[] = [
     inputSchema: {
       type: 'object',
       properties: {
-        platform: { type: 'string', enum: ['zepto', 'swiggy', 'swiggy-instamart', 'blinkit'], description: 'Platform to query' },
+        platform: { type: 'string', enum: ['zepto', 'swiggy', 'swiggy-instamart', 'blinkit', 'bigbasket'], description: 'Platform to query' },
       },
       required: ['platform'],
     },
@@ -330,7 +354,7 @@ const TOOLS: Tool[] = [
     inputSchema: {
       type: 'object',
       properties: {
-        platform: { type: 'string', enum: ['zepto', 'swiggy', 'swiggy-instamart', 'blinkit'], description: 'Platform to change' },
+        platform: { type: 'string', enum: ['zepto', 'swiggy', 'swiggy-instamart', 'blinkit', 'bigbasket'], description: 'Platform to change' },
         address_id: { type: 'string', description: 'Address id from list_addresses' },
       },
       required: ['platform', 'address_id'],
@@ -342,7 +366,7 @@ const TOOLS: Tool[] = [
     inputSchema: {
       type: 'object',
       properties: {
-        platform: { type: 'string', enum: ['zepto', 'swiggy-instamart', 'blinkit'] },
+        platform: { type: 'string', enum: ['zepto', 'swiggy-instamart', 'blinkit', 'bigbasket'] },
         phone: { type: 'string', description: '10-digit mobile number (optional if saved)' },
       },
       required: ['platform'],
@@ -353,9 +377,28 @@ const TOOLS: Tool[] = [
     description: 'Delete the saved session for a platform (e.g. to log in with a different phone number).',
     inputSchema: {
       type: 'object',
-      properties: { platform: { type: 'string', enum: ['zepto', 'swiggy-instamart', 'blinkit'] } },
+      properties: { platform: { type: 'string', enum: ['zepto', 'swiggy-instamart', 'blinkit', 'bigbasket'] } },
       required: ['platform'],
     },
+  },
+  {
+    name: 'get_payment_options',
+    description: 'Inspect checkout payment options and rank them by the user’s saved global/per-app preferences. Default: UPI collect, UPI QR, wallet, card, COD. Reports disabled methods, missing details and adapter vs manual execution. Does not submit payment. Generic UPI must be inspected before assuming collect/QR availability.',
+    inputSchema: { type: 'object', properties: { platform: { type: 'string', enum: ALL_PLATFORMS } }, required: ['platform'] },
+  },
+  {
+    name: 'prepare_payment',
+    description: 'Open the preferred payment category, or an explicitly chosen option_id from get_payment_options, and inspect its sub-options. Only clicks safe tabs/headings or exact recognized category buttons. Never submits a collect request, generates a transaction QR, debits a wallet, authorizes a card or places an order. Unknown/unimplemented controls require choosing in the app. Never fallback after an attempted payment.',
+    inputSchema: { type: 'object', properties: { platform: { type: 'string', enum: ALL_PLATFORMS }, option_id: { type: 'string' } }, required: ['platform'] },
+  },
+  {
+    name: 'set_payment_preferences',
+    description: 'Read/save custom payment routing globally or for one app. Order controls priority; omitted methods are excluded. upi expands to collect then QR. Fallback applies only to absent/disabled options before submission. Per-app fields inherit global fields. reset removes that scope. No CVV, full card number, bank password or OTP is stored.',
+    inputSchema: { type: 'object', properties: {
+      platform: { type: 'string', enum: [...ALL_PLATFORMS, 'swiggy'] },
+      order: { type: 'array', items: { type: 'string', enum: [...PAYMENT_METHODS, 'upi'] }, minItems: 1, uniqueItems: true },
+      allow_fallback: { type: 'boolean' }, upi_id: { type: 'string' }, wallet_provider: { type: 'string' }, card_last4: { type: 'string' }, reset: { type: 'boolean' },
+    } },
   },
   {
     name: 'set_preferences',
@@ -377,7 +420,7 @@ const TOOLS: Tool[] = [
     inputSchema: {
       type: 'object',
       properties: {
-        platform: { type: 'string', enum: ['zepto', 'swiggy', 'swiggy-instamart', 'blinkit'], description: 'Platform whose flow broke' },
+        platform: { type: 'string', enum: ['zepto', 'swiggy', 'swiggy-instamart', 'blinkit', 'bigbasket'], description: 'Platform whose flow broke' },
         step: { type: 'string', enum: FLOW_STEPS as unknown as string[], description: 'Which step to inspect/repair' },
         selector: { type: 'string', description: 'New CSS selector for that step. Omit to only inspect the page.' },
         apply: { type: 'boolean', description: 'Set true to save the selector (verified against the live page first). Defaults to false so you can review the page fingerprint before committing.' },
@@ -394,7 +437,7 @@ const TOOLS: Tool[] = [
       properties: {
         platform: {
           type: 'string',
-          enum: ['zepto', 'swiggy', 'swiggy-instamart', 'blinkit'],
+          enum: ['zepto', 'swiggy', 'swiggy-instamart', 'blinkit', 'bigbasket'],
           description: 'Platform to clear cart',
         },
         confirm: {
@@ -427,14 +470,19 @@ const getPlatform = singleFlight(async (name: string): Promise<QuickCommercePlat
     case 'blinkit':
       platform = new BlinkitPlatform();
       break;
+    case 'bigbasket':
+      platform = new BigBasketPlatform();
+      break;
     default:
       throw new Error(`Platform ${name} not supported`);
   }
 
   const stealth = new StealthBrowser();
   const context = await stealth.launch({
-    headless: true,
+    headless: name === 'bigbasket' ? process.env.QC_BIGBASKET_HEADLESS === 'true' : true,
     storageStatePath: sessionPath(name),
+    ...(name === 'bigbasket' ? { desktop: true, cdpEndpoint: process.env.QC_BIGBASKET_CDP_URL ?? interactiveBrowserEndpoint(name),
+      userDataDir: browserProfilePath(name), viewport: { width: 1280, height: 900 } } : {}),
   });
   browsers.set(name, stealth);
 
@@ -484,6 +532,12 @@ function platformKeysOf(args: any): string[] {
 
 async function handle(name: string, args: any): Promise<any> {
   try {
+    // Other browser operations can navigate or alter the armed checkout.
+    // An approval for that old screen must never authorize its replacement.
+    if (name !== 'place_order') {
+      const touched = args?.platforms?.includes('all') ? ALL_PLATFORMS : platformKeysOf(args);
+      for (const [token, approval] of orderTokens) if (touched.includes(approval.platform)) orderTokens.delete(token);
+    }
     switch (name) {
       case 'search_products': {
         const { query, platforms: platformList } = args as any;
@@ -534,6 +588,7 @@ async function handle(name: string, args: any): Promise<any> {
           }
 
           responseText += `📱 **${result.platform.toUpperCase()}** (${result.totalResults} results)\n`;
+          if (result.information) responseText += `${result.information}\n`;
           
           if (result.products.length === 0) {
             responseText += 'No products found.\n';
@@ -571,6 +626,13 @@ async function handle(name: string, args: any): Promise<any> {
           try {
             const platform = await getPlatform(platformName);
             const status = await platform.checkLogin();
+            // A user may complete login directly in the visible MCP browser.
+            // Persist that proven login just as submit_otp does.
+            if (platformName === 'bigbasket' && status.loggedIn) {
+              ensureSessionDir();
+              await browsers.get(platformName)!.getContext()!.storageState({ path: sessionPath(platformName) });
+              fs.chmodSync(sessionPath(platformName), 0o600);
+            }
             statuses.push({ platform: platformName, ...status });
           } catch (error: any) {
             statuses.push({ platform: platformName, error: error.message });
@@ -584,6 +646,7 @@ async function handle(name: string, args: any): Promise<any> {
             responseText += `❌ ${status.platform}: ${status.error}\n`;
           } else if (status.loggedIn) {
             responseText += `✅ ${status.platform}: Logged in\n`;
+            responseText += await deliveryAddressPrompt(await getPlatform(status.platform));
           } else if (status.otpSent) {
             responseText += `⏳ ${status.platform}: OTP sent${status.phone ? ` to ${status.phone}` : ''}\n`;
           } else if ('indeterminate' in status && status.indeterminate) {
@@ -622,8 +685,9 @@ async function handle(name: string, args: any): Promise<any> {
           
           if (success) {
             const pincodeAsk = loadPrefs().pincode ? '' : PINCODE_ASK;
+            const addressPrompt = await deliveryAddressPrompt(platform);
             return {
-              content: [{ type: 'text', text: `✅ Successfully logged in to ${platformName}${PAYMENT_PROMPT}${pincodeAsk}` }],
+              content: [{ type: 'text', text: `✅ Successfully logged in to ${platformName}${addressPrompt}${PAYMENT_PROMPT}${pincodeAsk}` }],
             };
           } else {
             // The platform has nothing to add, so don't send the user off to
@@ -690,15 +754,16 @@ async function handle(name: string, args: any): Promise<any> {
         const unattempted: string[] = [];
         for (const [i, item] of resolvedItems.entries()) {
           const label = item.name ?? item.productId;
-          if (item.name && existing.some(e => norm(e.name) === norm(item.name))) {
-            results.push({ name: item.name, success: true, already: true });
+          const existingItem = existing.find(e => e.id === item.productId || (item.name && norm(e.name) === norm(item.name)));
+          if (existingItem && existingItem.cartQuantity === item.quantity) {
+            results.push({ name: item.name ?? existingItem.name ?? label, success: true, already: true });
             continue;
           }
           // addToCart clicks the product card on the current page, so bring the
           // card up first. Product names carry a pack size ("... (750 ml)") that
           // the site itself omits from card labels, and searching for the full
           // string can return nothing at all - search on the product itself.
-          if (item.name) {
+          if (item.name && !existingItem) {
             const query = stripPackSize(item.name);
             // Don't swallow this: if the lookup fails, say so, rather than
             // letting addToCart report a misleading "product not found".
@@ -750,8 +815,10 @@ async function handle(name: string, args: any): Promise<any> {
         if (!cart) responseText += `\n⚠️ Could not read the cart back to verify.\n`;
         else {
           if (cart.notice) responseText += `\n🚫 **Store notice: ${cart.notice}** - ${noticeAdvice(cart.notice)}\n`;
-          const v = validateCart(resolvedItems.filter((i: any) => i.name), cart);
-          const unknownNames = resolvedItems.filter((i: any) => !i.name);
+          if (cart.information) responseText += `\nℹ️ ${cart.information}\n`;
+          const verifiedItems = resolvedItems.map((i: any) => ({ ...i, name: i.name ?? cart.items.find(e => e.id === i.productId)?.name }));
+          const v = validateCart(verifiedItems.filter((i: any) => i.name), cart);
+          const unknownNames = verifiedItems.filter((i: any) => !i.name);
           if (v.missing.length || v.wrongQty.length || !v.billOk || unknownNames.length) {
             responseText += `\n⚠️ **Cart validation failed**\n`;
             v.missing.forEach(m => responseText += `- Not in cart: ${m}\n`);
@@ -793,6 +860,7 @@ async function handle(name: string, args: any): Promise<any> {
         }
         
         responseText += `\nSubtotal: ₹${cart.subtotal}\n`;
+        if (cart.information) responseText += `ℹ️ ${cart.information}\n`;
         responseText += feeLines(cart);
         responseText += `**Total: ₹${cart.total}**`;
 
@@ -858,6 +926,11 @@ async function handle(name: string, args: any): Promise<any> {
 
       case 'logout': {
         const { platform: platformName } = args as any;
+        const interactive = platformName === 'bigbasket' && Boolean(process.env.QC_BIGBASKET_CDP_URL ?? interactiveBrowserEndpoint(platformName));
+        if (interactive) {
+          await getPlatform(platformName);
+          await browsers.get(platformName)?.clearAuthentication();
+        }
         await browsers.get(platformName)?.close();
         browsers.delete(platformName);
         platforms.delete(platformName);
@@ -865,6 +938,7 @@ async function handle(name: string, args: any): Promise<any> {
         // context we just closed.
         getPlatform.invalidate(platformName);
         fs.rmSync(sessionPath(platformName), { force: true });
+        if (platformName === 'bigbasket' && !interactive) fs.rmSync(browserProfilePath(platformName), { recursive: true, force: true });
         return { content: [{ type: 'text', text: `🚪 ${platformName}: session deleted. Use request_otp to log in again.` }] };
       }
 
@@ -881,42 +955,104 @@ async function handle(name: string, args: any): Promise<any> {
         return { content: [{ type: 'text', text: out }] };
       }
 
+      case 'set_payment_preferences': {
+        const { platform: rawPlatform, reset, ...patch } = args ?? {};
+        if (rawPlatform !== undefined && ![...ALL_PLATFORMS, 'swiggy'].includes(rawPlatform)) throw new Error('Unknown platform.');
+        if (reset !== undefined && typeof reset !== 'boolean') throw new Error('reset must be boolean.');
+        validatePaymentPreferences(patch);
+        const platform = rawPlatform === 'swiggy' ? 'swiggy-instamart' : rawPlatform;
+        let prefs = loadPrefs();
+        if (reset || Object.keys(patch).length) {
+          if (platform) {
+            const overrides = { ...prefs.platform_payment_preferences };
+            if (reset) delete overrides[platform];
+            if (Object.keys(patch).length) overrides[platform] = { ...(reset ? {} : overrides[platform]), ...patch };
+            prefs = savePrefs({ platform_payment_preferences: overrides });
+          } else {
+            if (reset) prefs = savePrefs({ payment_preferences: '', payment_method: '' } as any);
+            if (Object.keys(patch).length) prefs = savePrefs({ payment_preferences: { ...prefs.payment_preferences, ...patch } });
+          }
+        }
+        return { content: [{ type: 'text', text: JSON.stringify({ scope: platform ?? 'global',
+          preferences: paymentPreferencesFor(prefs, platform ?? ''), platform_overrides: platform ? undefined : prefs.platform_payment_preferences }) }] };
+      }
+
+      case 'get_payment_options': {
+        const { platform: name } = args;
+        const { preview, options, wallet } = await (await getPlatform(name)).getPaymentOptions();
+        return { content: [{ type: 'text', text: JSON.stringify({ platform: name, total: preview.cart.total,
+          address: preview.address, wallet, ...planPayment(options, paymentPreferencesFor(loadPrefs(), name)),
+          unclassified_options: preview.paymentMethods.filter(label => !paymentMethod(label)),
+          submitted: false, fallback_policy: 'Only absent/disabled methods before submission; never after failure, timeout or pending payment.' }) }] };
+      }
+
+      case 'prepare_payment': {
+        const { platform: name, option_id } = args;
+        const result = await (await getPlatform(name)).preparePayment(paymentPreferencesFor(loadPrefs(), name), option_id);
+        return { content: [{ type: 'text', text: JSON.stringify({ platform: name, total: result.preview.cart.total,
+          address: result.preview.address, plan: result.plan, opened: result.opened, message: result.message, submitted: false }) }] };
+      }
+
+      case 'get_wallet_status': {
+        const { platform: name, wallet_provider } = args as any;
+        const result = await (await getPlatform(name)).getWalletStatus(wallet_provider);
+        return { content: [{ type: 'text', text: JSON.stringify({ platform: name, address: result.preview.address, ...result.wallet, wallets: result.wallets, submitted: false }) }] };
+      }
+
       case 'place_order': {
         const prefs = loadPrefs();
         const a = args as any;
-        const { platform: platformName, confirm_token, card_last4 } = a;
-        const payment_method = a.payment_method ?? prefs.payment_method;
-        const upi_id = a.upi_id ?? prefs.upi_id;
+        const { platform: platformName, confirm_token } = a;
+        const preferences = paymentPreferencesFor(prefs, platformName);
+        const card_last4 = a.card_last4 ?? preferences.card_last4;
+        let wallet_provider = a.wallet_provider ?? preferences.wallet_provider;
+        let payment_method = a.payment_method;
+        const upi_id = a.upi_id ?? preferences.upi_id;
         const platform = await getPlatform(platformName);
         if (!platform) return { content: [{ type: 'text', text: `❌ Platform ${platformName} could not be initialised.` }] };
         const say = (text: string) => ({ content: [{ type: 'text', text }] });
 
+        if (!payment_method || payment_method === 'auto') {
+          if (confirm_token) return say('❌ Confirmation must explicitly name the method from the approved summary.');
+          const { options } = await platform.getPaymentOptions();
+          const plan = planPayment(options, preferences);
+          if (!plan.selected || plan.status !== 'ready_to_prepare') return say(JSON.stringify(plan));
+          payment_method = plan.selected.method;
+          if (plan.selected.balanceVerifiedWallet) wallet_provider = plan.selected.label;
+        }
+        if (payment_method === 'upi_collect') payment_method = 'upi';
         const method = String(payment_method ?? '').toLowerCase();
         const allowed = SUPPORTED_PAYMENTS[platformName] ?? [];
+        if (platformName === 'bigbasket' && method !== 'wallet') return say('BigBasket supports only fully covered native or linked wallet execution; other payment execution is deferred. No order was placed.');
         if (!allowed.includes(method)) {
-          return say(`❌ "${payment_method}" is not supported on ${platformName}. Supported there: ${allowed.join(', ')}. (UPI collect: Blinkit only; UPI QR: Zepto only; saved cards: Zepto and Blinkit; new cards, wallets and netbanking are not supported.) Ask the user to pick another mode.`);
+          return say(`❌ "${payment_method}" cannot be submitted by the ${platformName} adapter. Supported execution: ${allowed.join(', ')}. Use get_payment_options and prepare_payment for other available methods, then complete them in the app. No automatic fallback or payment was attempted.`);
         }
         if (method === 'upi' && !upi_id) return say('❌ UPI selected: ask the user for their UPI ID (name@bank) and pass it as upi_id.');
 
         if (method === 'card' && !card_last4) return say('❌ Card selected: ask the user which saved card (last 4 digits) and pass it as card_last4.');
 
         if (!confirm_token) {
+          // A new preparation replaces the old armed checkout for this app.
+          for (const [token, approval] of orderTokens) if (approval.platform === platformName) orderTokens.delete(token);
           // Read the cart BEFORE arming: getCart navigates away and would disarm the checkout screen.
           const preview = await platform.getCart();
-          const r = await platform.placeOrder(payment_method, false, method === 'card' ? card_last4 : upi_id);
+          const r = method === 'wallet' ? await platform.placeWalletOrder(false, wallet_provider) : await platform.placeOrder(payment_method, false, method === 'card' ? card_last4 : upi_id);
           if (!r.ready) return say(`❌ ${r.message}`);
           const token = randomUUID();
-          orderTokens.set(token, { platform: platformName, total: r.total!, expires: Date.now() + 5 * 60_000 });
+          if (method === 'wallet') wallet_provider = (r as { wallet?: { provider?: string } }).wallet?.provider;
+          orderTokens.set(token, { platform: platformName, method, detail: method === 'wallet' ? wallet_provider : method === 'card' ? card_last4 : method === 'upi' ? upi_id : undefined,
+            total: r.total!, expires: Date.now() + 5 * 60_000 });
           const items = preview?.items.map(i => `${i.cartQuantity}x ${i.name}`).join(', ') ?? '';
-          return say(`🛑 **Ready to place — NOT yet ordered.**\n${items}\n**To pay: ₹${r.total} (${method === 'upi' ? `UPI collect request to ${upi_id}; the user approves it on their phone` : method === 'upi_qr' ? 'UPI QR code; the user scans it with any UPI app' : method === 'card' ? `saved card ending ${card_last4}; may ask the user for a bank OTP` : 'Cash on Delivery'})**\nTo place this order, get the user's explicit approval, then call place_order again with the same payment_method${payment_method === 'upi' ? ' and upi_id' : ''} and confirm_token: ${token} (valid 5 min).`);
+          return say(`🛑 **Ready to place — NOT yet ordered.**\n${items}\n**To pay: ₹${r.total} (${method === 'wallet' ? `fully covered by ${wallet_provider}; wallet debit can complete immediately` : method === 'upi' ? `UPI collect request to ${upi_id}; the user approves it on their phone` : method === 'upi_qr' ? 'UPI QR code; the user scans it with any UPI app' : method === 'card' ? `saved card ending ${card_last4}; may ask the user for a bank OTP` : 'Cash on Delivery'})**\nTo place this order, get the user's explicit approval, then call place_order again with the same payment_method${payment_method === 'upi' ? ' and upi_id' : method === 'wallet' ? ' and wallet_provider' : ''} and confirm_token: ${token} (valid 5 min).`);
         }
 
         const t = orderTokens.get(confirm_token);
         orderTokens.delete(confirm_token); // one-time
-        if (!t || t.platform !== platformName || t.expires < Date.now()) {
+        const detail = method === 'wallet' ? wallet_provider : method === 'card' ? card_last4 : method === 'upi' ? upi_id : undefined;
+        if (!t || t.platform !== platformName || t.method !== method || t.detail !== detail || t.expires < Date.now()) {
           return say('❌ Invalid or expired confirm_token. Run the first step again.');
         }
-        const r = await platform.placeOrder(payment_method, true);
+        const r = method === 'wallet' ? await platform.placeWalletOrder(true, wallet_provider) : await platform.placeOrder(payment_method, true);
         const out: any[] = [{ type: 'text', text: `${r.success ? '✅' : '❌'} ${r.message}` }];
         // Clients cap tool results at ~1MB and drop anything larger without
         // saying so, so images are captured at CSS scale as JPEG (see
@@ -1043,7 +1179,7 @@ async function handle(name: string, args: any): Promise<any> {
             {
               type: 'text',
               text: ok
-                ? `✅ Delivery address on ${platformName.toUpperCase()} set to #${address_id}`
+                ? `✅ Delivery address on ${platformName.toUpperCase()} set to #${address_id}. This choice is saved for future sessions.`
                 : `❌ Could not select address #${address_id} on ${platformName.toUpperCase()} (bad id? run list_addresses)`,
             },
           ],

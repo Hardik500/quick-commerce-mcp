@@ -1,0 +1,20 @@
+#!/bin/sh
+set -eu
+cd "$(git rev-parse --show-toplevel)"
+# Tests must exercise the files that will actually be committed.
+if ! git diff --quiet -- src scripts package.json package-lock.json tsconfig.json eslint.config.mjs .githooks .github; then
+  echo "Stage all code and validation changes before committing; partial staging cannot be validated safely." >&2
+  exit 1
+fi
+if test -n "$(git ls-files --others --exclude-standard -- src scripts package.json package-lock.json tsconfig.json eslint.config.mjs .githooks .github)"; then
+  echo "Stage new code and validation files before committing." >&2
+  exit 1
+fi
+npm run check
+# This repository commits its compiled output. Build drift must be staged too.
+git diff --exit-code -- dist
+if test -n "$(git ls-files --others --exclude-standard -- dist)"; then
+  echo "Stage newly generated dist files before committing." >&2
+  exit 1
+fi
+git diff --cached --check

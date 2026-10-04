@@ -1,5 +1,9 @@
 import { pick } from '../flows.js';
 import { blockedBy, nextAddAction } from '../engine/add-strategy.js';
+import { loadPrefs, savePrefs, preferredAddress } from '../preferences.js';
+import { inspectPayments, preparePaymentPanel } from '../payment-ui.js';
+import { inspectWallet, inspectWallets, WalletCheckout } from '../wallet.js';
+import { sessionPath } from '../session-helper.js';
 /**
  * How long to wait for a dispatched click to show up on the card.
  *
@@ -14,6 +18,7 @@ export class QuickCommercePlatform {
     context = null;
     page = null;
     isLoggedIn = false;
+    walletCheckout;
     productQueries = new Map();
     /** Keep IDs usable after cart/address reads navigate away from search. */
     rememberSearch(query, products) {
@@ -54,6 +59,7 @@ export class QuickCommercePlatform {
     constructor(name, baseUrl) {
         this.name = name;
         this.baseUrl = baseUrl;
+        this.walletCheckout = new WalletCheckout(sessionPath(name).replace('-session.json', '-wallet-attempt.json'));
     }
     /**
      * Confirm there is a usable session, checking lazily if nobody has yet.
@@ -270,7 +276,7 @@ export class QuickCommercePlatform {
         if (!this.page)
             return false;
         try {
-            const target = (await this.getAddresses())[Number(addressId)];
+            const target = (await this.getAddresses()).find(a => a.id === addressId);
             if (!target)
                 return false;
             const cards = await this.openAddressPicker();
@@ -280,7 +286,8 @@ export class QuickCommercePlatform {
                 return false;
             await card.click();
             // Picker closes once the address is applied.
-            await cards.first().waitFor({ state: 'hidden', timeout: 10000 }).catch(() => { });
+            await cards.first().waitFor({ state: 'hidden', timeout: 10000 });
+            this.rememberAddress(target);
             return true;
         }
         catch (error) {
@@ -290,6 +297,53 @@ export class QuickCommercePlatform {
             console.error('Error selecting address:', error);
             return false;
         }
+    }
+    rememberAddress(address) {
+        const prefs = loadPrefs();
+        savePrefs({ selected_addresses: { ...prefs.selected_addresses,
+                [this.name]: { label: address.label, addressLine1: address.addressLine1, pincode: address.pincode },
+            } });
+    }
+    /** Reuse a confirmed choice, or select the sole saved address for this area.
+     * Ambiguous or missing matches stay visible to the caller for a user choice. */
+    async resolveDeliveryAddress() {
+        const addresses = await this.getAddresses();
+        const prefs = loadPrefs();
+        const target = preferredAddress(addresses, prefs.pincode, prefs.selected_addresses?.[this.name]);
+        if (target && await this.selectAddress(target.id))
+            return { addresses, selected: target };
+        return { addresses };
+    }
+    async getPaymentOptions() {
+        const preview = await this.getOrderPreview();
+        if (!preview || !this.page)
+            throw new Error('Checkout unavailable. Resolve cart, login and address before choosing payment.');
+        const options = await inspectPayments(this.page, this.name, preview.paymentMethods);
+        const wallet = await inspectWallet(this.page, this.name, preview.cart.total);
+        if (wallet.provider)
+            options.push({ id: `wallet:native:${wallet.provider.toLowerCase()}`, method: 'wallet', label: wallet.provider,
+                enabled: wallet.status === 'ready', execution: wallet.status === 'ready' ? 'adapter' : 'manual', balanceVerifiedWallet: true });
+        return { preview, options, wallet };
+    }
+    async getWalletStatus(provider) {
+        const preview = await this.getOrderPreview();
+        if (!preview || !this.page)
+            throw new Error('Checkout unavailable. Resolve cart, login and address first.');
+        await preparePaymentPanel(this.page, this.name, preview.paymentMethods, { order: ['wallet'], wallet_provider: provider });
+        const wallet = await inspectWallet(this.page, this.name, preview.cart.total, provider);
+        return { preview, wallet, wallets: await inspectWallets(this.page, this.name, preview.cart.total) };
+    }
+    async placeWalletOrder(confirm = false, provider) {
+        const { preview } = await this.getWalletStatus(provider);
+        if (!this.page)
+            return { success: false, message: 'Checkout unavailable; no wallet payment attempted.' };
+        return confirm ? this.walletCheckout.submit(this.page, this.name, preview, provider) : this.walletCheckout.prepare(this.page, this.name, preview, provider);
+    }
+    async preparePayment(preferences, optionId) {
+        const preview = await this.getOrderPreview();
+        if (!preview || !this.page)
+            throw new Error('Checkout unavailable. Resolve cart, login and address before preparing payment.');
+        return { preview, ...await preparePaymentPanel(this.page, this.name, preview.paymentMethods, preferences, optionId) };
     }
     /** Text of the most recent order (status, items, total), or null if unsupported/none. */
     async getLatestOrder() { return null; }
@@ -303,7 +357,8 @@ export class QuickCommercePlatform {
     static PAYMENT_LABELS = [
         'Google Pay', 'GPay', 'PhonePe', 'Paytm', 'BHIM', 'CRED', 'Amazon Pay', 'Mobikwik',
         'LazyPay', 'Pluxee', 'Netbanking', 'Net Banking', 'Cash on Delivery', 'Pay on Delivery',
-        'Add New Card', 'Add credit or debit cards', 'Navi', 'Pay via QR Code', 'Pay Later', 'UPI',
+        'Add New Card', 'Add credit or debit cards', 'Credit/Debit Card', 'Cards', 'Wallets',
+        'Navi', 'Pay via QR Code', 'Pay Later', 'UPI', 'Enter UPI ID',
     ];
     scanPaymentMethods(text) {
         // "Cash on delivery is not available for orders below ₹50" is not an option.

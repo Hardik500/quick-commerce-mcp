@@ -711,6 +711,8 @@ export class ZeptoPlatform extends QuickCommercePlatform {
     async placeOrder(paymentMethod, confirm = false, detail) {
         if (!this.page)
             throw new Error('Platform not initialized');
+        if (paymentMethod === 'wallet')
+            return this.placeWalletOrder(confirm, detail);
         if (paymentMethod === 'upi_qr')
             return this.placeQrOrder(confirm);
         if (paymentMethod === 'card')

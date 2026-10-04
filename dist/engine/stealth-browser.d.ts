@@ -13,13 +13,21 @@ export interface StealthConfig {
         height: number;
     };
     storageStatePath?: string;
+    desktop?: boolean;
+    /** Dedicated native desktop profile; never point at a user's main profile. */
+    userDataDir?: string;
+    /** Attach to a user-controlled local interactive Chrome browser. */
+    cdpEndpoint?: string;
 }
 /** Overrides the "chrome" channel; only used to point tests at a local build. */
 export declare const CHROME_PATH_ENV = "QC_CHROME_PATH";
 export declare class StealthBrowser {
     private browser;
     private context;
+    private attached;
     launch(config?: StealthConfig): Promise<BrowserContext>;
+    /** Erase authentication from a dedicated attached browser before disconnecting. */
+    clearAuthentication(): Promise<void>;
     close(): Promise<void>;
     getContext(): BrowserContext | null;
 }

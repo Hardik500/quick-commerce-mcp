@@ -14,6 +14,9 @@
  */
 export declare function ensureSessionDir(): void;
 export declare function sessionPath(platform: string): string;
+export declare function browserProfilePath(platform: string): string;
+/** The browser bridge publishes only its loopback endpoint, never credentials. */
+export declare function interactiveBrowserEndpoint(platform: string): string | undefined;
 /**
  * Screenshot options for general page captures: small enough to sit inside the
  * ~1 MB cap clients impose on tool results (Claude Desktop drops anything larger

@@ -1,7 +1,7 @@
 {
   "name": "quick-commerce-mcp",
   "version": "1.5.1",
-  "description": "MCP server to search, compare and order from Zepto, Blinkit and Swiggy Instamart via browser automation",
+  "description": "MCP server to search, compare and order from Zepto, Blinkit, Swiggy Instamart and BigBasket via browser automation",
   "main": "dist/index.js",
   "type": "module",
   "bin": {
@@ -23,7 +23,9 @@
     "test": "tsc && node --test dist/*.test.js",
     "lint": "eslint src/",
     "clean": "rm -rf dist/",
-    "prepublishOnly": "npm test"
+    "prepublishOnly": "npm test",
+    "check": "npm test && npm run lint && node --check scripts/bigbasket-windows-bridge.mjs && node --check scripts/bigbasket-windows-worker.mjs && node --check scripts/open-bigbasket-browser.mjs && node --check scripts/verify-bigbasket-mcp.mjs",
+    "setup:hooks": "git config core.hooksPath .githooks"
   },
   "keywords": [
     "mcp",

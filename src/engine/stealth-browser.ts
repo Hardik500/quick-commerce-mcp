@@ -13,6 +13,11 @@ export interface StealthConfig {
   userAgent?: string;
   viewport?: { width: number; height: number };
   storageStatePath?: string;
+  desktop?: boolean;
+  /** Dedicated native desktop profile; never point at a user's main profile. */
+  userDataDir?: string;
+  /** Attach to a user-controlled local interactive Chrome browser. */
+  cdpEndpoint?: string;
 }
 
 /**
@@ -44,6 +49,7 @@ export const CHROME_PATH_ENV = 'QC_CHROME_PATH';
 export class StealthBrowser {
   private browser: Browser | null = null;
   private context: BrowserContext | null = null;
+  private attached = false;
 
   async launch(config: StealthConfig = {}): Promise<BrowserContext> {
     const {
@@ -62,6 +68,31 @@ export class StealthBrowser {
     // QC_CHROME_PATH takes precedence over the "chrome" channel, for pointing at
     // a Chrome/Chromium build Playwright's channel lookup can't find.
     const chromePath = process.env[CHROME_PATH_ENV]?.trim();
+    if (config.cdpEndpoint) {
+      const endpoint = new URL(config.cdpEndpoint);
+      if (!config.desktop || endpoint.protocol !== 'http:' || !['localhost', '127.0.0.1', '[::1]'].includes(endpoint.hostname) || endpoint.username || endpoint.password || endpoint.pathname !== '/' || endpoint.search || endpoint.hash) {
+        throw new Error('Interactive browser attachment requires a loopback HTTP endpoint in desktop mode.');
+      }
+      this.browser = await chromium.connectOverCDP(config.cdpEndpoint);
+      this.attached = true;
+      this.context = this.browser.contexts()[0];
+      if (!this.context) throw new Error('Interactive browser did not expose a default context.');
+      return this.context;
+    }
+    if (config.userDataDir) {
+      if (!config.desktop) throw new Error('Persistent profiles require native desktop mode.');
+      fs.mkdirSync(config.userDataDir, { recursive: true, mode: 0o700 });
+      fs.chmodSync(config.userDataDir, 0o700);
+      this.context = await chromium.launchPersistentContext(config.userDataDir, {
+        ...(chromePath ? { executablePath: chromePath } : { channel: 'chrome' as const }),
+        headless, slowMo, viewport, deviceScaleFactor: 1, isMobile: false, hasTouch: false,
+        locale: 'en-IN', timezoneId: 'Asia/Kolkata',
+        proxy: proxy ? { server: proxy } : undefined,
+        handleSIGINT: false, handleSIGTERM: false, args: ['--disable-dev-shm-usage'],
+      });
+      this.browser = this.context.browser();
+      return this.context;
+    }
     this.browser = await chromium.launch({
       ...(chromePath ? { executablePath: chromePath } : { channel: 'chrome' as const }),
       headless,
@@ -73,7 +104,7 @@ export class StealthBrowser {
       // callers (e.g. session-helper.ts) own shutdown ordering.
       handleSIGINT: false,
       handleSIGTERM: false,
-      args: [
+      args: config.desktop ? ['--disable-dev-shm-usage'] : [
         '--disable-blink-features=AutomationControlled',
         '--disable-features=IsolateOrigins,site-per-process',
         '--disable-site-isolation-trials',
@@ -108,11 +139,12 @@ export class StealthBrowser {
 
     // Create context with stealth settings
     this.context = await this.browser.newContext({
-      userAgent,
+      // Keep native desktop APIs and UA for third-party login/payment frames.
+      userAgent: config.desktop ? config.userAgent : userAgent,
       viewport,
-      deviceScaleFactor: 3, // iPhone Retina
-      isMobile: true,
-      hasTouch: true,
+      deviceScaleFactor: config.desktop ? 1 : 3,
+      isMobile: !config.desktop,
+      hasTouch: !config.desktop,
       locale: 'en-IN',
       timezoneId: 'Asia/Kolkata',
       colorScheme: 'light',
@@ -128,6 +160,8 @@ export class StealthBrowser {
       storageState: storageStatePath && fs.existsSync(storageStatePath) ? storageStatePath : undefined,
     });
 
+    if (config.desktop) return this.context;
+
     // Apply stealth script to all pages
     this.context.on('page', async (page) => {
       await page.addInitScript(stealthScript);
@@ -142,7 +176,32 @@ export class StealthBrowser {
     return this.context;
   }
 
+  /** Erase authentication from a dedicated attached browser before disconnecting. */
+  async clearAuthentication(): Promise<void> {
+    if (!this.context) throw new Error('No browser context to clear.');
+    const state = await this.context.storageState();
+    const origins = new Set(state.origins.map(origin => origin.origin));
+    for (const page of this.context.pages()) {
+      try { const origin = new URL(page.url()).origin; if (origin !== 'null') origins.add(origin); } catch { /* blank page */ }
+    }
+    const page = this.context.pages()[0] ?? await this.context.newPage();
+    const cdp = await this.context.newCDPSession(page);
+    try {
+      await this.context.clearCookies();
+      for (const origin of origins) await cdp.send('Storage.clearDataForOrigin', { origin, storageTypes: 'all' });
+      for (const openPage of this.context.pages()) await openPage.goto('about:blank');
+    } finally { await cdp.detach(); }
+  }
+
   async close(): Promise<void> {
+    if (this.attached) {
+      // Disconnect MCP; the user's interactive browser and profile stay open.
+      await this.browser?.close();
+      this.browser = null; this.context = null; this.attached = false;
+      return;
+    }
+    // Closing a persistent context flushes the profile to disk.
+    if (this.context) await this.context.close();
     if (this.browser) {
       await this.browser.close();
       this.browser = null;

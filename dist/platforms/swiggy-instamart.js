@@ -1,6 +1,6 @@
 import { QuickCommercePlatform, } from './base.js';
 import { sessionPath, ensureSessionDir } from '../session-helper.js';
-import { storeNotice } from '../ranking.js';
+import { storeNotice, stripPackSize } from '../ranking.js';
 import { pick } from '../flows.js';
 /**
  * Instamart bill is one text line per cell: label, then "struck original, actual" or a single amount or "FREE"
@@ -54,6 +54,7 @@ export class SwiggyInstamartPlatform extends QuickCommercePlatform {
         deliveryTime: '._1y_Uf',
         // Becomes the "+" button once the item is in the cart.
         addToCartButton: '[data-testid="buttonpair-add"]',
+        inlineCount: '[data-testid="buttonpair-count"]',
         // Multi-variant items open this sheet instead of adding directly.
         variantSheet: '[data-testid="InstamartItemCustomizationWidget"]',
         variantRow: '[data-testid="variants-container"]',
@@ -216,17 +217,24 @@ export class SwiggyInstamartPlatform extends QuickCommercePlatform {
             }
             // Controlled React input: fill() doesn't register, real keystrokes do.
             await otpInput.click();
+            await otpInput.press('ControlOrMeta+A');
+            await otpInput.press('Backspace');
             await this.page.keyboard.type(otp, { delay: 80 });
             const verifyBtn = await this.page.$('button:has-text("VERIFY"), button:has-text("CONTINUE")');
             if (verifyBtn)
                 await verifyBtn.click().catch(() => { });
             await this.page.locator(this.selectors.otpInput).first().waitFor({ state: 'hidden', timeout: 15000 }).catch(() => { });
-            // Check if login succeeded
-            const loginCheck = await this.checkLogin();
-            if (loginCheck.loggedIn) {
-                await this.saveSession();
-            }
-            return loginCheck.loggedIn;
+            // The form can disappear while verification is still in flight. Save
+            // only once the authenticated cookie arrives, including slow hydration.
+            const deadline = Date.now() + 15000;
+            do {
+                if ((await this.checkLogin()).loggedIn) {
+                    await this.saveSession();
+                    return true;
+                }
+                await this.page.waitForTimeout(200);
+            } while (Date.now() < deadline);
+            return false;
         }
         catch (error) {
             console.error('Error submitting OTP:', error);
@@ -260,6 +268,7 @@ export class SwiggyInstamartPlatform extends QuickCommercePlatform {
                 console.log('No search results found');
             }
             const products = await this.extractProductResults();
+            this.rememberSearch(query, products);
             return {
                 query,
                 platform: this.name,
@@ -290,17 +299,19 @@ export class SwiggyInstamartPlatform extends QuickCommercePlatform {
                     // `__name` wrapper that doesn't exist in the browser.
                     const [name, price, mrp, quantity, deliveryTime] = await element.evaluate((card, sels) => sels.map(q => card.parentElement.querySelector(q)?.textContent?.trim() || ''), [s.productName, s.productPrice, s.productMRP, s.productQuantity, s.deliveryTime]);
                     const data = { name, price, mrp, quantity, deliveryTime };
-                    // ponytail: cards expose no product id, so the name is the id; addToCart
-                    // looks the card up by name on the current results page.
+                    if (!data.name)
+                        continue;
+                    // Cards expose no stable ID. Retain the full search label, including
+                    // pack size, and remember its query for later cart/address navigation.
                     products.push({
-                        id: data.name,
+                        id: this.productIdentity(data.name, data.quantity),
                         name: data.name || 'Unknown Product',
                         price: this.parsePrice(data.price),
                         mrp: data.mrp ? this.parsePrice(data.mrp) : undefined,
                         quantity: data.quantity || this.extractQuantity(data.name),
                         deliveryTime: data.deliveryTime || undefined,
                         platform: this.name,
-                        inStock: true,
+                        inStock: !/out of stock|sold out|unavailable/i.test(await element.innerText()),
                     });
                 }
                 catch {
@@ -317,40 +328,49 @@ export class SwiggyInstamartPlatform extends QuickCommercePlatform {
         const match = name.match(/(\d+\s*(?:ml|L|g|kg|pcs|pack))/i);
         return match ? match[1] : '1 unit';
     }
+    productIdentity(name, size) {
+        return size && stripPackSize(name) === name ? `${name} (${size})` : name;
+    }
     async addToCart(productId, quantity) {
         if (!this.page)
             throw new Error('Platform not initialized');
+        this.lastAddBlocker = null;
+        if (!Number.isInteger(quantity) || quantity < 1)
+            return 'failed';
         try {
-            // productId is the product name (see extractProductResults). That name
-            // carries the pack size ("... (750 ml)") while the card's image alt does
-            // not, so an exact match never hits - match on the name up to a trailing
-            // parenthesised pack size instead.
-            const base = productId.replace(/\s*\([^)]*\)\s*$/, '').replace(/"/g, '\\"');
-            const card = this.page
-                .locator(this.selectors.searchResults)
-                .filter({ has: this.page.locator(`img[alt^="${base}"]`) })
-                .first();
-            if ((await card.count().catch(() => 0)) === 0) {
-                // Some listings use the bare name, so fall back to matching the card's
-                // own text before giving up.
-                const byText = this.page
-                    .locator(this.selectors.searchResults)
-                    .filter({ hasText: base.slice(0, 40) })
-                    .first();
-                if ((await byText.count().catch(() => 0)) === 0) {
-                    // About this product, not about the page: the caller's other items
-                    // are still worth attempting.
-                    console.log('Product not found:', productId);
-                    return 'not-found';
-                }
-                return this.addFromCard(byText, quantity);
+            let card = await this.findProductCard(productId);
+            if (!card) {
+                await this.restoreProductSearch(productId);
+                card = await this.findProductCard(productId);
             }
-            return this.addFromCard(card, quantity);
+            if (!card)
+                return 'not-found';
+            if (await card.getByText(/out of stock|sold out|unavailable/i).first().isVisible().catch(() => false))
+                return 'unavailable';
+            return await this.addFromCard(card, quantity);
         }
         catch (error) {
+            this.lastAddBlocker = error.message.split('\n')[0];
+            const sheet = this.page.locator(this.selectors.variantSheet);
+            if (await sheet.isVisible().catch(() => false)) {
+                await sheet.locator(this.selectors.variantSheetClose).click({ timeout: 3000 }).catch(() => { });
+            }
             console.error('Error adding to cart:', error);
             return 'failed';
         }
+    }
+    async findProductCard(productId) {
+        const cards = this.page.locator(this.selectors.searchResults);
+        const fields = await cards.evaluateAll((elements, selectors) => elements.map(el => selectors.map(selector => el.parentElement?.querySelector(selector)?.textContent?.trim() || '')), [this.selectors.productName, this.selectors.productQuantity]);
+        const names = fields.map(([name, size]) => this.productIdentity(name, size));
+        const norm = (name) => name.toLowerCase().replace(/\s+/g, ' ').trim();
+        let matches = names.map((name, i) => ({ name, i })).filter(x => norm(x.name) === norm(productId));
+        // Legacy callers may pass a bare title. Never choose the first of several
+        // different packs, or interpolate a product label into a CSS selector.
+        if (!matches.length && stripPackSize(productId) === productId)
+            matches = names.map((name, i) => ({ name, i }))
+                .filter(x => norm(stripPackSize(x.name)) === norm(stripPackSize(productId)));
+        return matches.length === 1 ? cards.nth(matches[0].i) : null;
     }
     /** Click through a located product card to put `quantity` in the cart. */
     async addFromCard(card, quantity) {
@@ -361,9 +381,9 @@ export class SwiggyInstamartPlatform extends QuickCommercePlatform {
         // ones turn into an inline stepper where buttonpair-add becomes the "+".
         // Both are handled inside the shared ladder so the first click stays bounded
         // and the result is still proved rather than assumed.
-        const outcome = await this.addViaCard(card, {
+        const outcome = await this.withCartWrites(() => this.addViaCard(card, {
             add: [this.selectors.addToCartButton],
-            landed: [this.selectors.cartItemCount],
+            landed: [this.selectors.inlineCount],
             increment: [this.selectors.addToCartButton],
             between: async (c) => {
                 const sheet = page.locator(this.selectors.variantSheet);
@@ -377,32 +397,44 @@ export class SwiggyInstamartPlatform extends QuickCommercePlatform {
                     // path is checked while the site is still thinking, and a successful
                     // add gets reported as a failure.
                     await page.waitForLoadState('networkidle', { timeout: 8000 }).catch(() => { });
-                    return false;
+                    const count = c.locator(this.selectors.inlineCount);
+                    await count.filter({ hasText: /^\s*1\s*$/ }).waitFor({ state: 'visible', timeout: 8000 });
+                    for (let i = 1; i < quantity; i++) {
+                        await this.incrementQuantity(c, i + 1, this.selectors.addToCartButton, this.selectors.inlineCount);
+                    }
+                    return true;
                 }
-                const cardPrice = await c.evaluate((el, sel) => el.parentElement?.querySelector(sel)?.textContent?.trim() || '', this.selectors.productPrice);
-                // Pick the variant matching the card's price (the single-unit pack),
-                // falling back to the first variant.
+                const [cardPrice, cardSize] = await c.evaluate((el, sels) => sels.map(sel => el.parentElement?.querySelector(sel)?.textContent?.trim() || ''), [this.selectors.productPrice, this.selectors.productQuantity]);
                 const rows = sheet.locator(this.selectors.variantRow);
-                let row = rows.first();
+                const matches = [];
+                const norm = (text) => text.toLowerCase().replace(/\s+/g, '');
+                const sizePattern = new RegExp(`(?:^|[^\\d.])${norm(cardSize).replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}(?![a-z\\d])`, 'i');
                 for (let i = 0; i < (await rows.count().catch(() => 0)); i++) {
                     const p = await rows.nth(i).locator(this.selectors.variantPrice).textContent().catch(() => null);
-                    if (p?.trim() === cardPrice) {
-                        row = rows.nth(i);
-                        break;
+                    const text = await rows.nth(i).innerText();
+                    if (p && this.parsePrice(p) === this.parsePrice(cardPrice) &&
+                        (!cardSize || sizePattern.test(norm(text))))
+                        matches.push(i);
+                }
+                if (matches.length !== 1) {
+                    throw new Error('Instamart did not offer an unambiguous matching pack; no variant was added');
+                }
+                const row = rows.nth(matches[0]);
+                const count = row.locator(this.selectors.stepperAdd);
+                const current = Number((await count.innerText()).trim()) || 0;
+                // An existing variant is idempotent too; its ADD control is also the
+                // quantity counter, so blindly clicking it can increment the basket.
+                if (!current) {
+                    await this.changeQuantity(row, () => count.click({ timeout: 5000 }), 1);
+                    for (let i = 1; i < quantity; i++) {
+                        await this.incrementQuantity(row, i + 1, this.selectors.stepperPlus, this.selectors.cartItemCount);
                     }
                 }
-                await row.locator(this.selectors.stepperAdd).click({ timeout: 8000 }).catch(() => { });
-                for (let i = 1; i < quantity; i++) {
-                    await row.locator(this.selectors.stepperPlus).click({ timeout: 8000 }).catch(() => { });
-                }
-                await sheet.locator(this.selectors.variantSheetClose).click({ timeout: 8000 }).catch(() => { });
-                await sheet.waitFor({ state: 'hidden', timeout: 5000 }).catch(() => { });
-                // Let the add request reach the server before reading the card back.
-                await page.waitForLoadState('networkidle', { timeout: 8000 }).catch(() => { });
-                const proof = await pick(c, this.name, 'cartLanded', [this.selectors.cartItemCount], 5000);
-                return !!proof && (await proof.locator.isVisible().catch(() => false));
+                await sheet.locator(this.selectors.variantSheetClose).click({ timeout: 5000 });
+                await sheet.waitFor({ state: 'hidden', timeout: 5000 });
+                return true;
             },
-        }, quantity);
+        }, quantity), false);
         if (outcome !== 'added' && outcome !== 'already')
             console.log(`Add to cart did not complete (${outcome})`);
         return outcome;
@@ -443,7 +475,9 @@ export class SwiggyInstamartPlatform extends QuickCommercePlatform {
                     const name = await element.$eval(this.selectors.cartItemName, el => el.textContent?.trim() || '');
                     const size = await element.$eval(this.selectors.cartItemQuantity, el => el.textContent?.trim() || '');
                     const countText = await element.$eval(this.selectors.cartItemCount, el => el.textContent?.trim() || '1');
-                    const cartQuantity = parseInt(countText) || 1;
+                    const cartQuantity = parseInt(countText, 10);
+                    if (!Number.isFinite(cartQuantity) || cartQuantity <= 0)
+                        continue;
                     // cart-item-price is the line total.
                     const lineTotal = this.parsePrice(await element.$eval(this.selectors.cartItemPrice, el => el.textContent?.trim() || ''));
                     items.push({
@@ -473,21 +507,102 @@ export class SwiggyInstamartPlatform extends QuickCommercePlatform {
         await this.page.waitForLoadState('networkidle', { timeout: 8000 }).catch(() => { });
         await this.page.locator(this.selectors.cartItems).first().waitFor({ timeout: 5000 }).catch(() => { });
     }
+    /** Wait for this counter and the writes caused by its click, not unrelated
+     * page text. The site renders counts optimistically before saving the cart. */
+    async incrementQuantity(row, expected, builtin, countSelector) {
+        const plus = await pick(row, this.name, 'cartIncrement', [builtin]);
+        if (!plus)
+            throw new Error('Instamart increment control was not found');
+        await this.changeQuantity(row, () => plus.locator.click({ timeout: 3000 }), expected, countSelector);
+    }
+    async changeQuantity(row, action, expected, countSelector = this.selectors.cartItemCount) {
+        await this.withCartWrites(async () => {
+            await action();
+            const count = row.locator(countSelector);
+            if (expected)
+                await count.filter({ hasText: new RegExp(`^\\s*${expected}\\s*$`) })
+                    .waitFor({ state: 'visible', timeout: 5000 });
+            else
+                await count.filter({ hasText: /^\s*[1-9]\d*\s*$/ })
+                    .waitFor({ state: 'hidden', timeout: 5000 });
+        });
+    }
+    async withCartWrites(action, requireWrite = true) {
+        const page = this.page;
+        const pending = [];
+        const isWrite = (request) => ['POST', 'PUT', 'PATCH', 'DELETE'].includes(request.method()) &&
+            new URL(request.url()).origin === new URL(this.baseUrl).origin &&
+            /cart/i.test(new URL(request.url()).pathname);
+        // Instamart debounces writes after the optimistic counter has changed.
+        // Install this before clicking so reload cannot cancel that pending write.
+        const firstWrite = requireWrite ? page.waitForRequest(isWrite, { timeout: 5000 }).catch(() => null) : null;
+        const track = (request) => {
+            if (!isWrite(request))
+                return;
+            pending.push(page.waitForResponse(response => response.request() === request, { timeout: 10000 }).catch(() => null));
+        };
+        page.on('request', track);
+        try {
+            const result = await action().then(value => ({ value }), error => ({ error }));
+            if (firstWrite && !(await firstWrite)) {
+                if ('error' in result)
+                    throw result.error;
+                throw new Error('Instamart did not send the cart update');
+            }
+            for (const committed of pending) {
+                const response = await committed;
+                if (!response?.ok())
+                    throw new Error('Instamart did not confirm the cart update');
+                const error = await response.finished();
+                if (error)
+                    throw error;
+                // Swiggy wraps application errors in HTTP 200, sometimes in a second
+                // data/statusCode envelope. A transport success is not a saved basket.
+                const body = await response.json().catch(() => null);
+                const rejected = [body, body?.data].find(data => typeof data?.statusCode === 'number' && data.statusCode !== 0);
+                if (rejected) {
+                    if (/address/i.test(rejected.statusMessage || '')) {
+                        throw new Error('Instamart has no valid delivery address for this session; use list_addresses/select_address, then retry');
+                    }
+                    throw new Error(`Instamart rejected the cart update (code ${rejected.statusCode}); check get_cart_summary before retrying`);
+                }
+            }
+            if ('error' in result)
+                throw result.error;
+            return result.value;
+        }
+        finally {
+            page.off('request', track);
+        }
+    }
+    activeCartRows() {
+        return this.page.locator(this.selectors.cartItems).filter({
+            has: this.page.locator(this.selectors.cartItemCount).filter({ hasText: /^\s*[1-9]\d*\s*$/ }),
+        });
+    }
+    async decrementCartRow(row) {
+        const before = Number((await row.locator(this.selectors.cartItemCount).innerText()).trim());
+        if (!Number.isInteger(before) || before < 1)
+            throw new Error('Could not read Instamart cart quantity');
+        // Some site layouts overlay the stepper with the other-items container.
+        await this.changeQuantity(row, () => row.locator(this.selectors.stepperMinus).dispatchEvent('click'), before - 1);
+    }
     async removeFromCart(productId) {
         if (!this.page)
             throw new Error('Platform not initialized');
         try {
             await this.openCart();
-            // Decrement until the row disappears.
+            const name = stripPackSize(this.getProductName(productId) || productId);
+            const exactName = new RegExp(`^\\s*${name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\s*$`, 'i');
+            let removed = false;
             for (let i = 0; i < 50; i++) {
-                const row = this.page
-                    .locator(this.selectors.cartItems)
-                    .filter({ has: this.page.locator(this.selectors.cartItemName, { hasText: productId }) })
-                    .first();
-                if ((await row.count()) === 0)
-                    return i > 0;
-                // dispatchEvent: a sibling "other items" container can overlay the button.
-                await this.afterChange(() => row.locator(this.selectors.stepperMinus).dispatchEvent('click'));
+                const rows = this.activeCartRows().filter({ has: this.page.locator(this.selectors.cartItemName, { hasText: exactName }) });
+                if ((await rows.count()) === 0)
+                    return removed;
+                if ((await rows.count()) !== 1)
+                    return false;
+                await this.decrementCartRow(rows.first());
+                removed = true;
             }
             return false;
         }
@@ -504,14 +619,16 @@ export class SwiggyInstamartPlatform extends QuickCommercePlatform {
             // Unavailable items sit outside the stepper list and block checkout; "Remove all" drops them.
             const removeAll = this.page.getByText('Remove all', { exact: true }).first();
             if (await removeAll.isVisible().catch(() => false)) {
-                await removeAll.click({ timeout: 5000 });
-                await this.page.getByText(/items? unavailable/i).first().waitFor({ state: 'hidden', timeout: 5000 }).catch(() => { });
+                await this.withCartWrites(async () => {
+                    await removeAll.click({ timeout: 5000 });
+                    await removeAll.waitFor({ state: 'hidden', timeout: 5000 });
+                });
             }
             for (let i = 0; i < 100; i++) {
-                const minus = this.page.locator(`${this.selectors.cartItems} ${this.selectors.stepperMinus}`).first();
-                if ((await minus.count()) === 0)
-                    return true;
-                await this.afterChange(() => minus.dispatchEvent('click'));
+                const row = this.activeCartRows().first();
+                if ((await row.count()) === 0)
+                    return !(await removeAll.isVisible().catch(() => false));
+                await this.decrementCartRow(row);
             }
             return false;
         }
@@ -572,7 +689,8 @@ export class SwiggyInstamartPlatform extends QuickCommercePlatform {
             const payBtn = this.page.getByText(/proceed to pay/i).last();
             const banner = this.page.getByText(/currently (unserviceable|closed)|not accepting orders|add address to proceed/i).first();
             await selectAddr.or(payBtn).or(banner).first().waitFor({ timeout: 20000 });
-            if (await selectAddr.isVisible().catch(() => false)) {
+            if (await selectAddr.isVisible().catch(() => false) &&
+                /select address|add address/i.test(await selectAddr.innerText())) {
                 const addresses = await this.getAddresses().catch(() => []);
                 if (addresses.length === 0) {
                     throw new Error('No delivery address is set on Instamart and none are saved. Add one in the app, then retry - ' +
@@ -602,9 +720,11 @@ export class SwiggyInstamartPlatform extends QuickCommercePlatform {
         }
     }
     armedTotal;
-    async placeOrder(paymentMethod, confirm = false) {
+    async placeOrder(paymentMethod, confirm = false, provider) {
         if (!this.page)
             throw new Error('Platform not initialized');
+        if (paymentMethod === 'wallet')
+            return this.placeWalletOrder(confirm, provider);
         if (paymentMethod !== 'cod')
             return { success: false, message: 'Only "cod" is supported on Instamart.' };
         // "Pay on Delivery" opens a sub-page whose single "Cash/Pay on Delivery" button is the final click.

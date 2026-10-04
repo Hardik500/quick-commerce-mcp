@@ -46,18 +46,27 @@ export declare class SwiggyInstamartPlatform extends QuickCommercePlatform {
     search(query: string): Promise<SearchResult>;
     private extractProductResults;
     private extractQuantity;
+    private productIdentity;
     addToCart(productId: string, quantity: number): Promise<AddOutcome>;
+    private findProductCard;
     /** Click through a located product card to put `quantity` in the cart. */
     private addFromCard;
     getCart(): Promise<CartSummary | null>;
     private extractCartItems;
     private openCart;
+    /** Wait for this counter and the writes caused by its click, not unrelated
+     * page text. The site renders counts optimistically before saving the cart. */
+    private incrementQuantity;
+    private changeQuantity;
+    private withCartWrites;
+    private activeCartRows;
+    private decrementCartRow;
     removeFromCart(productId: string): Promise<boolean>;
     clearCart(): Promise<boolean>;
     protected openAddressPicker(): Promise<Locator>;
     selectAddress(addressId: string, retried?: boolean): Promise<boolean>;
     getOrderPreview(): Promise<OrderPreview | null>;
     private armedTotal?;
-    placeOrder(paymentMethod: string, confirm?: boolean): Promise<any>;
+    placeOrder(paymentMethod: string, confirm?: boolean, provider?: string): Promise<any>;
 }
 //# sourceMappingURL=swiggy-instamart.d.ts.map

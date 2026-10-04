@@ -43,6 +43,12 @@ test('BigBasket QR preparation never dispatches; confirmed generation returns a 
         const wallet = await new WalletCheckout(journal).prepare(page, 'bigbasket', preview());
         assert.equal(wallet.ready, false); // Shared guard forbids fallback after a QR attempt.
         assert.equal(await page.frames()[1].evaluate(() => window.clicks), 1);
+        // A matching terminal merchant outcome archives/releases the shared guard.
+        // The same controller must consult the journal instead of a stale memory flag.
+        rmSync(journal);
+        rmSync(journal + '.pending');
+        await page.frames()[1].locator('#qr').evaluate(e => { e.innerHTML = ''; });
+        assert.equal((await checkout.prepare(page, preview())).ready, true);
     }
     finally {
         await page.close();

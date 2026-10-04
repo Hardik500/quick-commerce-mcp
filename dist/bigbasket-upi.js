@@ -13,10 +13,8 @@ export class BigBasketUpiCheckout {
         this.journalPath = journalPath;
     }
     hasPending() {
-        if (this.pending)
-            return true;
         if (!this.journalPath)
-            return false;
+            return this.pending;
         if (existsSync(`${this.journalPath}.pending`))
             return true;
         if (!existsSync(this.journalPath))

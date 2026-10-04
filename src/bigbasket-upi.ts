@@ -14,8 +14,7 @@ export class BigBasketUpiCheckout {
   constructor(private journalPath?: string) {}
 
   hasPending(): boolean {
-    if (this.pending) return true;
-    if (!this.journalPath) return false;
+    if (!this.journalPath) return this.pending;
     if (existsSync(`${this.journalPath}.pending`)) return true;
     if (!existsSync(this.journalPath)) return false;
     try { return JSON.parse(readFileSync(this.journalPath, 'utf8')).status !== 'confirmed'; }

@@ -262,8 +262,16 @@ const TOOLS = [
             }, required: ['platform'] },
     },
     {
+        name: 'get_payment_status',
+        description: 'Watch the current confirmed payment attempt after UPI/bank handoff. Reads merchant order-detail redirects across all platforms; reports confirmed, failed, cancelled or pending without retrying, navigating or submitting. Order-history URLs alone never prove success. Terminal matching outcomes reconcile the attempt guard across restarts.',
+        inputSchema: { type: 'object', properties: {
+                platform: { type: 'string', enum: ['zepto', 'swiggy', 'swiggy-instamart', 'blinkit', 'bigbasket'] },
+                wait_ms: { type: 'integer', minimum: 0, maximum: 30000, description: 'Bounded wait for the merchant outcome; default 0.' },
+            }, required: ['platform'] },
+    },
+    {
         name: 'get_order_status',
-        description: 'Show the most recent order (status, items, total) from order history. Read-only. Supported on Blinkit and Zepto (not yet Instamart).',
+        description: 'Show the most recent order (status, items, total) from order history. Read-only. Blinkit/Zepto support history lookup; BigBasket reads an already-open order detail. Use get_payment_status for the current tracked payment on any platform.',
         inputSchema: {
             type: 'object',
             properties: { platform: { type: 'string', enum: ['zepto', 'swiggy', 'swiggy-instamart', 'blinkit', 'bigbasket'], description: 'Platform to check' } },
@@ -831,10 +839,15 @@ async function handle(name, args) {
                     content: [{ type: 'text', text: responseText }],
                 };
             }
+            case 'get_payment_status': {
+                const { platform: name, wait_ms = 0 } = args;
+                if (!Number.isInteger(wait_ms) || wait_ms < 0 || wait_ms > 30000)
+                    throw new Error('wait_ms must be an integer between 0 and 30000.');
+                const outcome = await (await getPlatform(name)).getPaymentStatus(wait_ms);
+                return { content: [{ type: 'text', text: JSON.stringify(outcome) }] };
+            }
             case 'get_order_status': {
-                const platform = platforms.get(args.platform);
-                if (!platform)
-                    return { content: [{ type: 'text', text: `❌ Platform not initialized. Search first.` }] };
+                const platform = await getPlatform(args.platform);
                 const text = await platform.getLatestOrder();
                 return { content: [{ type: 'text', text: text ?? 'No order found (or not supported on this platform yet).' }] };
             }
@@ -1021,8 +1034,12 @@ async function handle(name, args) {
                 if (!t || t.platform !== platformName || t.method !== method || t.detail !== detail || t.expires < Date.now()) {
                     return say('❌ Invalid or expired confirm_token. Run the first step again.');
                 }
+                await platform.beginPaymentTracking(method, t.total);
                 const r = method === 'wallet' ? await platform.placeWalletOrder(true, wallet_provider) : await platform.placeOrder(payment_method, true);
-                const out = [{ type: 'text', text: `${r.success ? '✅' : '❌'} ${r.message}` }];
+                if (r.submitted === false)
+                    platform.abandonUnsubmittedPayment();
+                const outcome = await platform.getPaymentStatus();
+                const out = [{ type: 'text', text: `${r.success ? '✅' : '❌'} ${r.message}\nPayment tracking: ${JSON.stringify(outcome)}\nAfter approving in your UPI/bank app, use get_payment_status with wait_ms: 30000 to observe the merchant outcome. This never creates another transaction.` }];
                 // Clients cap tool results at ~1MB and drop anything larger without
                 // saying so, so images are captured at CSS scale as JPEG (see
                 // SCREENSHOT_OPTS). The mime type has to follow the buffer.

@@ -22,6 +22,7 @@ export declare class BigBasketPlatform extends QuickCommercePlatform {
     getAddresses(): Promise<Address[]>;
     selectAddress(id: string): Promise<boolean>;
     getOrderPreview(): Promise<OrderPreview | null>;
+    getLatestOrder(): Promise<string | null>;
     placeOrder(paymentMethod?: string, confirm?: boolean, provider?: string): Promise<import("../wallet.js").WalletOrderResult>;
 }
 //# sourceMappingURL=bigbasket.d.ts.map

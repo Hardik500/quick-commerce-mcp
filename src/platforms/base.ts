@@ -10,6 +10,7 @@ import { inspectPayments, preparePaymentPanel } from '../payment-ui.js';
 import type { PaymentPreferences } from '../payments.js';
 import { inspectWallet, inspectWallets, WalletCheckout, type WalletOrderResult } from '../wallet.js';
 import { sessionPath } from '../session-helper.js';
+import { PaymentTracker } from '../payment-tracking.js';
 
 /**
  * How long to wait for a dispatched click to show up on the card.
@@ -106,6 +107,7 @@ export abstract class QuickCommercePlatform {
   protected page: Page | null = null;
   protected isLoggedIn: boolean = false;
   private walletCheckout: WalletCheckout;
+  private paymentTracker: PaymentTracker;
   private productQueries = new Map<string, { query: string; name: string }>();
 
   /** Keep IDs usable after cart/address reads navigate away from search. */
@@ -150,6 +152,7 @@ export abstract class QuickCommercePlatform {
     this.name = name;
     this.baseUrl = baseUrl;
     this.walletCheckout = new WalletCheckout(sessionPath(name).replace('-session.json', '-wallet-attempt.json'));
+    this.paymentTracker = new PaymentTracker(sessionPath(name).replace('-session.json', '-payment-tracking.json'), sessionPath(name).replace('-session.json', '-wallet-attempt.json'));
   }
 
   /**
@@ -515,6 +518,12 @@ export abstract class QuickCommercePlatform {
   /** Text of the most recent order (status, items, total), or null if unsupported/none. */
   async getLatestOrder(): Promise<string | null> { return null; }
 
+  async beginPaymentTracking(method: string, total: number) {
+    await this.paymentTracker.begin(this.name, method, total, this.context?.pages() ?? []);
+  }
+  abandonUnsubmittedPayment() { this.paymentTracker.abandonUnsubmitted(); }
+  async getPaymentStatus(waitMs = 0) { return this.paymentTracker.inspect(() => this.context?.pages() ?? [], waitMs); }
+
   /**
    * Put the page into the state where `step`'s element should exist, so a broken
    * flow can be inspected rather than only reported. Override per platform; the
@@ -552,6 +561,7 @@ export abstract class QuickCommercePlatform {
     ready?: boolean;
     total?: number;
     orderId?: string;
+    submitted?: boolean;
     image?: Buffer; // e.g. a UPI QR the user must scan
     message: string;
   }>;

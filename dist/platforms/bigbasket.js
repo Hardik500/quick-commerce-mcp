@@ -399,6 +399,11 @@ export class BigBasketPlatform extends QuickCommercePlatform {
         });
         return { cart, address: delivery || address, paymentMethods: methods };
     }
+    async getLatestOrder() {
+        if (!this.page || !/\/member\/order-details\/track-order\/[\w-]+/.test(new URL(this.page.url()).pathname))
+            return null;
+        return this.page.locator('body').innerText();
+    }
     async placeOrder(paymentMethod = 'auto', confirm = false, provider) {
         if (paymentMethod === 'wallet')
             return this.placeWalletOrder(confirm, provider);

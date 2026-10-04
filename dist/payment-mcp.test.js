@@ -13,6 +13,9 @@ test('fresh MCP exposes payment routing on every app and persists validated scop
     try {
         await client.connect(transport);
         const listed = await client.listTools();
+        assert.ok(listed.tools.some(t => t.name === 'get_payment_status'));
+        const status = await client.callTool({ name: 'get_payment_status', arguments: { platform: 'bigbasket', wait_ms: -1 } });
+        assert.equal(status.isError, true);
         const wallet = listed.tools.find(t => t.name === 'get_wallet_status');
         const walletSchema = wallet.inputSchema;
         assert.deepEqual(walletSchema.properties.platform.enum, ['zepto', 'swiggy', 'swiggy-instamart', 'blinkit', 'bigbasket']);

@@ -483,3 +483,20 @@ The image and private full-resolution file are returned to the client; no paymen
 was made. Fixtures include GIF extraction and mismatched/invalid payloads. Actual
 payment completion remains untested. UPI collect is not
 offered in the observed screen and is not enabled for BigBasket.
+
+### Post-payment tracking
+
+Confirmed `place_order` calls now persist the payment attempt before dispatch,
+then inspect merchant order-detail redirects without leaving the payment screen.
+`get_payment_status(platform, wait_ms: 30000)` watches the current attempt across
+all four platforms, including new tabs. It distinguishes confirmed orders, failed
+payments, cancellation, pending and unknown outcomes. An order-history URL alone
+never proves success, and a confirmed order is marked paid only if the merchant
+explicitly shows payment completion. Baseline old orders, unrelated merchant
+hosts, history lists, conflicting status text and mismatched amounts cannot count
+as completion. Tracking survives MCP restarts. A matching terminal outcome
+archives and releases the wallet/UPI attempt guard without retrying a payment.
+No navigation, payment submission or automatic fallback happens during watching.
+Redirect tracking is fixture-tested on all four apps; the BigBasket unpaid QR
+redirect and merchant cancellation were observed live. Paid completion still
+requires the final user-controlled payment test.

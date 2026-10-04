@@ -102,7 +102,7 @@ export class WalletCheckout {
             if (record.status === 'pending')
                 return true;
         }
-        return this.pending;
+        return this.journalPath ? false : this.pending;
     }
     record(status, orderId) {
         if (!this.journalPath)

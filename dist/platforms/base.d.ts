@@ -88,6 +88,7 @@ export declare abstract class QuickCommercePlatform {
     protected page: Page | null;
     protected isLoggedIn: boolean;
     private walletCheckout;
+    private paymentTracker;
     private productQueries;
     /** Keep IDs usable after cart/address reads navigate away from search. */
     protected rememberSearch(query: string, products: Product[]): void;
@@ -267,6 +268,9 @@ export declare abstract class QuickCommercePlatform {
     }>;
     /** Text of the most recent order (status, items, total), or null if unsupported/none. */
     getLatestOrder(): Promise<string | null>;
+    beginPaymentTracking(method: string, total: number): Promise<void>;
+    abandonUnsubmittedPayment(): void;
+    getPaymentStatus(waitMs?: number): Promise<import("../payment-tracking.js").PaymentObservation>;
     /**
      * Put the page into the state where `step`'s element should exist, so a broken
      * flow can be inspected rather than only reported. Override per platform; the
@@ -286,6 +290,7 @@ export declare abstract class QuickCommercePlatform {
         ready?: boolean;
         total?: number;
         orderId?: string;
+        submitted?: boolean;
         image?: Buffer;
         message: string;
     }>;

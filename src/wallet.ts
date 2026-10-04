@@ -107,7 +107,7 @@ export class WalletCheckout {
       if (!['pending', 'confirmed'].includes(record.status)) throw new Error('Invalid wallet attempt journal; inspect it before making another payment.');
       if (record.status === 'pending') return true;
     }
-    return this.pending;
+    return this.journalPath ? false : this.pending;
   }
 
   private record(status: 'pending' | 'confirmed', orderId?: string) {

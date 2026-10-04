@@ -4,6 +4,7 @@ import { loadPrefs, savePrefs, preferredAddress } from '../preferences.js';
 import { inspectPayments, preparePaymentPanel } from '../payment-ui.js';
 import { inspectWallet, inspectWallets, WalletCheckout } from '../wallet.js';
 import { sessionPath } from '../session-helper.js';
+import { PaymentTracker } from '../payment-tracking.js';
 /**
  * How long to wait for a dispatched click to show up on the card.
  *
@@ -19,6 +20,7 @@ export class QuickCommercePlatform {
     page = null;
     isLoggedIn = false;
     walletCheckout;
+    paymentTracker;
     productQueries = new Map();
     /** Keep IDs usable after cart/address reads navigate away from search. */
     rememberSearch(query, products) {
@@ -60,6 +62,7 @@ export class QuickCommercePlatform {
         this.name = name;
         this.baseUrl = baseUrl;
         this.walletCheckout = new WalletCheckout(sessionPath(name).replace('-session.json', '-wallet-attempt.json'));
+        this.paymentTracker = new PaymentTracker(sessionPath(name).replace('-session.json', '-payment-tracking.json'), sessionPath(name).replace('-session.json', '-wallet-attempt.json'));
     }
     /**
      * Confirm there is a usable session, checking lazily if nobody has yet.
@@ -347,6 +350,11 @@ export class QuickCommercePlatform {
     }
     /** Text of the most recent order (status, items, total), or null if unsupported/none. */
     async getLatestOrder() { return null; }
+    async beginPaymentTracking(method, total) {
+        await this.paymentTracker.begin(this.name, method, total, this.context?.pages() ?? []);
+    }
+    abandonUnsubmittedPayment() { this.paymentTracker.abandonUnsubmitted(); }
+    async getPaymentStatus(waitMs = 0) { return this.paymentTracker.inspect(() => this.context?.pages() ?? [], waitMs); }
     /**
      * Put the page into the state where `step`'s element should exist, so a broken
      * flow can be inspected rather than only reported. Override per platform; the

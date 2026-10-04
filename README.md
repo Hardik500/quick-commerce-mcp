@@ -2,6 +2,11 @@
 
 Universal quick commerce aggregation via MCP - compare and order from Zepto, Blinkit, and Swiggy Instamart in one interface.
 
+**Current verification scope:** Blinkit and Zepto search/cart flows were checked for
+**1.5.1**. Checkout, payments, and order tracking were not reverified; Instamart was
+not included in this regression check. See [flow status](#supported-platforms-and-flow-status)
+before relying on a feature.
+
 ## ✨ Features
 
 - **Multi-Platform Search**: Find products across all platforms simultaneously
@@ -11,8 +16,8 @@ Universal quick commerce aggregation via MCP - compare and order from Zepto, Bli
 - **Itemised Bill**: Handling, late-night, GST and other fees listed separately in cart and order preview
 - **Addresses**: `list_addresses` / `select_address` (retries once on flaky picker clicks)
 - **Store Notices**: Closed/unserviceable stores and "Add address to proceed" are detected and reported with next steps
-- **User Control**: Two-step `place_order` (preview token, then confirm); CVV read from `QC_CVV_<last4>`, never logged
-- **Scannable Payment QR**: UPI QR orders return the QR alone, at full resolution, cropped from the payment sheet — optionally opened in an image viewer so it is actually scannable
+- **User Control (not reverified)**: Two-step `place_order` (preview token, then confirm); CVV read from `QC_CVV_<last4>`, never logged
+- **Payment QR (not reverified)**: Zepto UPI QR support is implemented, including full-resolution cropping and an optional image viewer; successful payment is not guaranteed by generating a QR
 - **OTP Handling**: Prompts for OTP when session expires
 
 ## Demo
@@ -57,7 +62,12 @@ Claude Desktop, Cursor, Windsurf (add to the client's MCP config, then restart i
 | `diagnose_flow` | Inspect or repair a broken browser flow (e.g. after a site changes its markup) |
 | `list_addresses` / `select_address` | Pick the delivery address |
 
-Then shop: `search_products`, `compare_prices`, `resolve_items`, `add_to_cart`, `remove_from_cart`, `get_cart_summary`, `clear_cart`, `get_order_preview`, and finally `place_order` (preview first, then confirm with the token). After ordering, `get_order_status` shows the latest order on Blinkit or Zepto.
+The verified shopping path for Blinkit and Zepto is `search_products` → `add_to_cart`
+→ `get_cart_summary` → `remove_from_cart` / `clear_cart`. `compare_prices` and
+`resolve_items` have shared logic test coverage, but their full multi-platform flow
+was not reverified. Checkout via `get_order_preview` / `place_order`, and order
+tracking via `get_order_status`, are implemented but outside the current verified
+path; see [flow status](#supported-platforms-and-flow-status).
 
 **Always pass `payment_method` explicitly to `place_order`.** Your saved default is a single value applied to every platform, and the same string means different things on different ones — `upi` is Blinkit-only, and Zepto needs `upi_qr` for a scannable QR. Relying on the default is the most common reason a payment method comes back unsupported.
 
@@ -75,13 +85,71 @@ Sessions are saved to `~/.quick-commerce-mcp/sessions/` and expire eventually; j
 
 **Tests:** install the test browser with `npx playwright install chromium`, then run `npm test` and `npm run lint`. To use an existing Chromium executable, set `QC_CHROME_PATH` when running the tests. The browser regression tests use local fixture storefronts; they do not use saved sessions or make live purchases.
 
-## 🛠️ Supported Platforms
+## Supported platforms and flow status
 
-| Platform | Search | Cart | Order | Notes |
-|----------|--------|------|-------|-------|
-| Zepto | ✅ | ✅ | 🚧 | Cart, validation, order preview, UPI QR payment and `get_order_status` (order list) verified live. The QR was generated and scanned end-to-end; the post-payment status *string* is not yet confirmed against the orders page |
-| Blinkit | ✅ | ✅ | ✅ | Full flow verified live: cart, preview, UPI payment and `get_order_status` (list + latest order detail) |
-| Swiggy Instamart | ✅ | ✅ | 🚧 | Cart + validation verified live; order preview not yet working; `get_order_status` not supported (orders page unreachable when tested) |
+Status for **1.5.1**, checked **2026-10-04**. Release verification ran **64 automated
+tests** plus live Blinkit/Zepto checks against the packaged build. This is the scope
+of those checks, not a guarantee that every product, address, store, or future site
+update will behave identically.
+
+- **Live verified**: exercised against the real platform during this release check.
+- **Test covered**: exercised by unit tests or controlled browser fixtures, not a
+  dedicated live check of that scenario.
+- **Not reverified**: implemented or previously reported working, but not checked
+  in this release. This does **not** mean it is known broken.
+- **Unsupported / previously failed**: an explicit implementation gap or a prior
+  failure; a prior failure is not a fresh result for this release.
+
+| Flow | Blinkit | Zepto | Swiggy Instamart |
+|------|---------|-------|-----------------|
+| Saved-session login | Live verified, including fresh-process restore | Live verified using the saved session | Not reverified |
+| Fresh OTP login (`request_otp` → `submit_otp`) | Live verified; saved login survives restart | Not reverified | Not reverified |
+| Product search (`search_products`) | Live verified | Live verified | Not reverified |
+| ID-only add after cart navigation, with exact quantity (`add_to_cart`) | Live verified + test covered | Live verified + test covered | Not reverified |
+| Repeating an add without duplicating the item | Live verified + test covered | Live verified + test covered | Not reverified |
+| Cart summary and quantity readback (`get_cart_summary`) | Live verified + test covered | Live verified + test covered | Not reverified |
+| Remove an item using its search label (`remove_from_cart`) | Live verified + test covered | Live verified + test covered | Not reverified |
+| Clear a cart and confirm it stays empty after reload (`clear_cart`) | Live verified + test covered | Live verified + test covered | Not reverified |
+| Out-of-stock handling as an individual item failure | Test covered | Test covered | Not reverified |
+| Closed-store dialog dismissal and retained removed rows | Test covered | Not reverified | Not reverified |
+| Bill parsing, pack-size matching, and validation helpers | Test covered | Test covered | Bill parsing test covered; live cart not reverified |
+| Price-ranking/item-resolution helpers (`compare_prices`, `resolve_items`) | Shared logic test covered; full multi-platform flow not reverified | Shared logic test covered; full multi-platform flow not reverified | Full flow not reverified |
+| Saved address listing (`list_addresses`) | Live verified after login and in a fresh process | Not reverified | Not reverified |
+| Changing delivery address (`select_address`) | Not reverified | Not reverified | Not reverified |
+| Checkout preview (`get_order_preview`) | Not reverified | Not reverified | Previously failed; not reverified |
+| Order placement / payment (`place_order`, including COD) | Not reverified | Not reverified | Not reverified |
+| Order history/status (`get_order_status`) | Not reverified | Not reverified | Unsupported |
+| Live selector diagnosis/repair (`diagnose_flow`) | Not reverified | Not reverified | Not reverified |
+
+### Known limitations and recovery
+
+- **Payments were deliberately excluded from the 1.5.1 regression checks.** Older
+  Blinkit UPI and Zepto QR demonstrations do not establish current reliability.
+  Do not treat a QR or a returned success message as proof of payment or a confirmed
+  order; check the platform's own app/order history.
+- **Instamart checkout preview previously failed**, and this release did not retest
+  that failure. Instamart order-status retrieval is not implemented. Its older
+  search/cart results have not been reverified either.
+- **Configured payment modes are not a verification promise:** Blinkit accepts
+  `cod`/`upi`/`card`, Zepto `cod`/`upi_qr`/`card`, and Instamart `cod`. Other modes
+  (new cards, wallets, netbanking, Pay Later) are unsupported. Platform eligibility
+  can still make an accepted mode unavailable for a particular cart.
+- **Older incomplete Blinkit sessions need one fresh OTP login.** Version 1.5.1
+  waits for authenticated client state before saving; a leftover legacy cookie
+  alone no longer counts as a logged-in account.
+- **Cart actions require confirmation where prompted.** Repeat adds are treated
+  as already present, not as instructions to add the requested quantity again.
+  After removal/clearing, read `get_cart_summary` to confirm the result. Live
+  verification used only test items and restored both carts to empty.
+- **Stock, store hours, and address eligibility remain platform-controlled.** A
+  closed/unserviceable notice is not a promise that checkout can proceed. Browser
+  markup and bot checks can change; inspect a broken flow with `diagnose_flow`
+  rather than assuming an earlier verification still applies.
+
+The automated browser regressions are in
+[src/platform-flows.test.ts](src/platform-flows.test.ts); shared logic tests are in
+[src/logic.test.ts](src/logic.test.ts). They use fixtures, not live accounts or
+purchases. Passing them does not certify checkout or payment flows.
 
 See [AUTHENTICATION.md](AUTHENTICATION.md) for login troubleshooting - rejected OTPs, missing delivery locations, and how to log in by hand when the automated flow won't cooperate.
 
@@ -107,6 +175,10 @@ See [AUTHENTICATION.md](AUTHENTICATION.md) for login troubleshooting - rejected 
 ```
 
 ### Pay by UPI QR
+
+This feature is implemented but **not reverified for 1.5.1**. The example describes
+the intended flow, not a guarantee of payment success.
+
 ```
 "Pay for my Zepto cart with a UPI QR"
 ```
@@ -161,15 +233,9 @@ in parallel, so comparing three platforms is still concurrent.
 
 ## 📋 Status
 
-- ✅ Login (OTP + saved session) on all three platforms
-- ✅ Search, add to cart, cart summary, clear cart
-- ✅ Price comparison, item resolution, cart validation, itemised bills
-- ✅ Address selection, store notices
-- ✅ UPI QR payment on Zepto (QR generated and scanned; Blinkit payment also verified)
-- ⚠️ Instamart checkout preview not yet working
-- ⚠️ Payment outcome strings are still unverified against the live pages — a
-  payment is confirmed by the user, not read back from the platform
-- ⚠️ Instamart `place_order` not yet exercised on a live payment
+See the [versioned flow-status table](#supported-platforms-and-flow-status) for the
+single source of verification scope and known limitations. Implemented tools and
+older demonstrations are not a claim of current end-to-end support.
 
 ## 🤝 Contributing
 

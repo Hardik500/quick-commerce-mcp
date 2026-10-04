@@ -82,4 +82,29 @@ test('MCP process restart preserves preferences and supports a fresh client hand
         rmSync(home, { recursive: true, force: true });
     }
 });
+test('MCP stderr diagnostics report tool latency while keeping arguments and unknown names private', async () => {
+    const home = mkdtempSync(join(tmpdir(), 'qc-timing-mcp-'));
+    const client = new Client({ name: 'timing-test', version: '1' }, { capabilities: {} });
+    const transport = new StdioClientTransport({ command: process.execPath, args: ['dist/index.js'],
+        env: { ...process.env, HOME: home }, stderr: 'pipe' });
+    let diagnostics = '';
+    try {
+        await client.connect(transport);
+        transport.stderr?.on('data', chunk => { diagnostics += chunk.toString(); });
+        await client.callTool({ name: 'CANARY_unknown_private_tool', arguments: { platform: 'CANARY_private_platform', phone: 'CANARY_private_argument' } });
+        await client.callTool({ name: 'get_payment_status', arguments: { platform: 'blinkit', wait_ms: -1 } });
+        for (let i = 0; i < 20 && !diagnostics.includes('get_payment_status'); i++)
+            await new Promise(resolve => setTimeout(resolve, 20));
+        const records = diagnostics.split('\n').filter(line => line.startsWith('{')).map(line => JSON.parse(line));
+        assert.equal(records.find(r => r.tool === 'unknown_tool')?.outcome, 'error');
+        const timing = records.find(r => r.tool === 'get_payment_status');
+        assert.deepEqual(timing.platforms, ['blinkit']);
+        assert.ok(timing.queue_ms >= 0 && timing.duration_ms >= 0);
+        assert.ok(!diagnostics.includes('CANARY'));
+    }
+    finally {
+        await client.close();
+        rmSync(home, { recursive: true, force: true });
+    }
+});
 //# sourceMappingURL=payment-mcp.test.js.map

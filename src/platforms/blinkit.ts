@@ -503,8 +503,11 @@ export class BlinkitPlatform extends QuickCommercePlatform {
   private async openCart(): Promise<void> {
     if (!this.page) return;
     await this.page.goto(`${this.baseUrl}/cart`, { waitUntil: 'domcontentloaded', timeout: 30000 });
-    await this.page.waitForLoadState('networkidle', { timeout: 8000 }).catch(() => {});
-    await this.page.locator(this.selectors.cartItems).first().waitFor({ timeout: 5000 }).catch(() => {});
+    // Analytics/polling can keep the page busy indefinitely. Wait for cart UI,
+    // including its explicit empty state, instead of unrelated network traffic.
+    await this.page.locator(this.selectors.cartItems)
+      .or(this.page.getByText(/(?:your )?cart is empty|empty cart/i))
+      .filter({ visible: true }).first().waitFor({ timeout: 5000 }).catch(() => {});
     // A closed store still allows editing the cart, but its notice dialog
     // intercepts stepper clicks. Acknowledge that dialog through its own button.
     this.cartNotice = storeNotice(await this.page.locator('body').innerText());
@@ -717,6 +720,7 @@ export class BlinkitPlatform extends QuickCommercePlatform {
     if (!this.page) throw new Error('Platform not initialized');
     const cart = await this.getCart();
     if (!cart || cart.items.length === 0) return null;
+    if (cart.notice) throw new Error(`Blinkit checkout unavailable: ${cart.notice}`);
 
     try {
       // Proceed -> saved-address list -> pick one -> Proceed To Pay -> payment
@@ -725,12 +729,12 @@ export class BlinkitPlatform extends QuickCommercePlatform {
       // pick the row matching the address chosen via selectAddress (if any).
       // If the cart already has an address attached, the footer shows
       // "Delivering to X" + "Proceed To Pay" and skips the list.
-      const payBtn = this.page.getByText(/^Proceed To Pay/).last();
+      const payBtn = this.page.getByText(/^Proceed\s+to\s+(?:Pay|Payment)\b/i).last();
       const proceed = this.page.getByText('Proceed', { exact: true }).last();
-      const first = await Promise.race([
-        proceed.waitFor({ timeout: 8000 }).then(() => 'list' as const),
-        payBtn.waitFor({ timeout: 8000 }).then(() => 'pay' as const),
-      ]).catch(() => null);
+      const frameEl = this.page.locator('iframe[src*="zpaykit"]').first();
+      await proceed.or(payBtn).or(frameEl).filter({ visible: true }).first().waitFor({ timeout: 8000 })
+        .catch(() => { throw new Error('Blinkit checkout did not offer Proceed, Proceed to Pay, or a payment panel. Check the cart availability and delivery address before retrying.'); });
+      const first = await frameEl.isVisible() ? 'payment' : await payBtn.isVisible() ? 'pay' : 'list';
       let address = '';
       const selected = this.selectedAddress;
       const wanted = selected?.addressLine1.split(',')[0];
@@ -740,9 +744,10 @@ export class BlinkitPlatform extends QuickCommercePlatform {
       // The cart keeps the address from its last checkout, even after the header
       // location changes, so a stale footer must be switched via "Change".
       let useList = first === 'list';
-      if (first === 'pay') {
+      if (first === 'pay' || first === 'payment') {
         address = await readFooter();
         if (wanted && !address.toLowerCase().includes(wanted.toLowerCase())) {
+          if (first === 'payment') throw new Error('Blinkit payment panel does not prove the chosen delivery address. Re-select the address before preparing payment.');
           await this.page.getByText('Change', { exact: true }).last().click({ timeout: 5000 });
           useList = true;
         }
@@ -752,12 +757,12 @@ export class BlinkitPlatform extends QuickCommercePlatform {
         const all = this.page.locator('[class*="AddressList__AddressLists"] > *');
         await all.first().waitFor({ timeout: 8000 });
         const match = selected ? all.filter({ hasText: wanted! }).filter({ hasText: selected.label }) : all;
-        const row = (await match.count()) > 0 ? match.first() : all.first();
+        if (selected && await match.count() !== 1) throw new Error('The chosen Blinkit address is absent or ambiguous at checkout. Use list_addresses/select_address before retrying.');
+        const row = match.first();
         address = (await row.innerText()).replace(/\s*\n\s*/g, ', ');
         await row.click();
       }
-      await payBtn.click({ timeout: 10000 });
-      const frameEl = this.page.locator('iframe[src*="zpaykit"]').first();
+      if (first !== 'payment') await payBtn.click({ timeout: 8000 });
       await frameEl.waitFor({ timeout: 15000 });
       const frame = this.page.frameLocator('iframe[src*="zpaykit"]').first();
       await frame.getByText(/UPI/).first().waitFor({ timeout: 15000 });
@@ -786,7 +791,7 @@ export class BlinkitPlatform extends QuickCommercePlatform {
       // so the cart changed under us; the caller must re-read the cart and re-add.
       if (/out of stock items? removed/i.test(body)) throw new Error('Blinkit removed an out-of-stock item from the cart at checkout; re-check the cart and add the item again or pick another');
       if (/out of stock item/i.test(body)) throw new Error('Cart has an out-of-stock item on Blinkit; remove it before checkout');
-      return null;
+      throw error;
     }
   }
 

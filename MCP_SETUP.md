@@ -179,6 +179,33 @@ If MCP is connected, you'll see results from the platform searches.
 Browser automation runs in the local MCP server process, independently of the client UI. Zepto, Blinkit and Instamart normally launch headless browsers. BigBasket currently rejects true headless browsing for the tested account. Its Windows bridge defaults to an invisible background mode: normal Chrome runs on an isolated Windows desktop. This is not true headless, but live saved-login, search, cart and checkout checks work without a browser window on the user desktop. Use `QC_BIGBASKET_BROWSER_MODE=visible` for explicit login recovery, or `headless` for experiments. The bridge is a separate local setup step; it is not automatically launched by Claude and is not bundled in the published package. A cloud-hosted MCP deployment cannot attach to this local browser. True headless BigBasket tests were blocked; background payment submission and fresh OTP login remain unverified. See [AUTHENTICATION.md](AUTHENTICATION.md) for the interactive setup.
 
 
+### Windows Claude using an outdated checkout
+
+Claude launches exactly the executable and `dist/index.js` named in its config.
+Updating Claude does not rebuild or update that MCP server. A Windows copy at
+`C:\Users\user\Workspace\Projects\quick-commerce-mcp` can therefore keep running
+1.4.1 while this WSL project contains newer fixes. For this workspace, the local
+Claude server entry can point directly to the authoritative WSL build:
+
+```json
+"quick-commerce": {
+  "command": "wsl.exe",
+  "args": ["-d", "Ubuntu-24.04", "--", "bash", "-lc",
+    "cd /home/hardik/projects/quick-commerce-mcp && exec /home/hardik/.nvm/versions/node/v24.21.0/bin/node dist/index.js"]
+}
+```
+
+Build in WSL first and fully restart Claude after changing the config. Saved
+sessions/preferences are environment-specific; Windows login state is not
+silently copied over WSL state. Keep the BigBasket Windows bridge running for
+its verified invisible background mode.
+
+New server logs include `mcp_tool_completed` records with tool name, known
+platforms, queue time, execution time and outcome. Arguments and results are
+excluded. Adapter progress messages go to stderr so stdout remains JSON-RPC.
+Claude may omit tool names/arguments from its own protocol log summaries; those
+summaries alone cannot identify which tool caused every latency spike.
+
 ### MCP not appearing in client
 - Restart the client completely
 - Check JSON syntax in config file

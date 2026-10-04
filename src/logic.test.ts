@@ -1,3 +1,4 @@
+import { platformKeysOf, toolTiming, ALL_PLATFORMS } from './tool-runtime.js';
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { unitPrice, relevant, rankByUnitPrice, rankByPackPrice, searchQueries, resolveItem, validateCart, storeNotice } from './ranking.js';
@@ -591,4 +592,20 @@ test('pack price drives basket spend even when a bulk pack has a cheaper unit pr
   ];
   assert.equal(rankByPackPrice(products)[0].p.id, 'single');
   assert.deepEqual(searchQueries('Coca Cola Zero Sugar 750 ml'), ['Coca Cola Zero Sugar 750 ml', 'Coke Zero', 'Coca']);
+});
+
+test('all-platform comparisons and searches lock every page; Swiggy aliases use one lock', () => {
+  assert.deepEqual(platformKeysOf({ platforms: ['all'] }), [...ALL_PLATFORMS].sort());
+  assert.deepEqual(platformKeysOf({ items: [] }, 'compare_prices'), [...ALL_PLATFORMS].sort());
+  assert.deepEqual(platformKeysOf({ platform: 'swiggy', platforms: ['swiggy-instamart'] }), ['swiggy-instamart']);
+});
+
+test('tool timing distinguishes queue time without logging sensitive names, arguments or responses', () => {
+  const record = toolTiming('unexpected-sensitive-input', ['search_products'], ['blinkit', 'sensitive-input'], 0, 120, 420, true);
+  assert.equal(record.tool, 'unknown_tool');
+  assert.deepEqual(record.platforms, ['blinkit']);
+  assert.equal(record.queue_ms, 120);
+  assert.equal(record.duration_ms, 300);
+  assert.equal(record.outcome, 'error');
+  assert.ok(!JSON.stringify(record).includes('sensitive-input'));
 });

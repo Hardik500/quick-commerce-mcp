@@ -15,6 +15,7 @@ import { StealthBrowser } from './engine/stealth-browser.js';
 import { browserProfilePath, interactiveBrowserEndpoint, ensureSessionDir, sessionPath } from './session-helper.js';
 import { loadPrefs, savePrefs, paymentPreferencesFor } from './preferences.js';
 import { PAYMENT_METHODS, paymentMethod, planPayment, validatePaymentPreferences } from './payments.js';
+import { ALL_PLATFORMS, platformKeysOf, toolTiming } from './tool-runtime.js';
 import { bigBasketHeadless } from './browser-runtime.js';
 import { singleFlight } from './single-flight.js';
 import { keyedLock } from './keyed-lock.js';
@@ -46,8 +47,8 @@ async function deliveryAddressPrompt(platform) {
         return '\n\nCould not read saved addresses. Call list_addresses and ask the user to choose before adding items.';
     }
 }
-// All platforms supported by the "all" shorthand in tool inputs.
-const ALL_PLATFORMS = ['zepto', 'swiggy-instamart', 'blinkit', 'bigbasket'];
+// Protocol stdout must contain JSON-RPC only. Adapter diagnostics go to stderr.
+console.log = console.error;
 /**
  * This server's version, read from package.json rather than written here.
  *
@@ -513,21 +514,21 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
     // Every platform is driven through one shared Playwright page, so two calls
     // touching the same platform would abort each other's navigation and scrape
     // each other's DOM. Serialise per platform; different platforms stay parallel.
-    return platformLocks.run(platformKeysOf(args), () => handle(name, args));
+    const queued = performance.now();
+    const keys = platformKeysOf(args, name);
+    return platformLocks.run(keys, async () => {
+        const started = performance.now();
+        let error = true;
+        try {
+            const result = await handle(name, args);
+            error = result.isError === true;
+            return result;
+        }
+        finally {
+            console.error(JSON.stringify(toolTiming(name, TOOLS.map(t => t.name), keys, queued, started, performance.now(), error)));
+        }
+    });
 });
-// Which platforms a call will drive, used to pick the lock keys. "all" expands
-// inside the handlers, so it is dropped here and those calls simply don't lock.
-function platformKeysOf(args) {
-    const keys = [];
-    if (typeof args?.platform === 'string')
-        keys.push(args.platform);
-    if (Array.isArray(args?.platforms)) {
-        for (const p of args.platforms)
-            if (typeof p === 'string' && p !== 'all')
-                keys.push(p);
-    }
-    return keys;
-}
 async function handle(name, args) {
     try {
         // Other browser operations can navigate or alter the armed checkout.

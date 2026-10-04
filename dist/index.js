@@ -19,7 +19,7 @@ import { singleFlight } from './single-flight.js';
 import { keyedLock } from './keyed-lock.js';
 import { FLOW_STEPS, clearFlow, fingerprint, loadFlows, saveFlow, selfRepair, verifyFlow } from './flows.js';
 import * as fs from 'node:fs';
-import { relevant, rankByUnitPrice, resolveItem, stripPackSize, unitPrice, validateCart } from './ranking.js';
+import { relevant, rankByUnitPrice, rankByPackPrice, searchQueries, resolveItem, stripPackSize, unitPrice, validateCart } from './ranking.js';
 // One line per fee; platforms without itemisation fall back to a lump "Fees" line.
 // What the caller should do about a store banner.
 function noticeAdvice(notice) {
@@ -91,6 +91,18 @@ async function searchOn(platformName, query) {
     catch (error) {
         return { platform: platformName, error: error.message };
     }
+}
+// Refine native UI queries when a verbose query yields no exact matches.
+async function searchForComparison(platformName, query) {
+    let last = { platform: platformName, error: 'No search results.' };
+    for (const candidate of searchQueries(query)) {
+        last = await searchOn(platformName, candidate);
+        if ('error' in last && last.error)
+            return last;
+        if ('products' in last && relevant(query, last.products).length)
+            return last;
+    }
+    return last;
 }
 // Store active platform instances, each with its own browser context so
 // sessions (and any bot-detection fallout) stay isolated per platform.
@@ -1062,7 +1074,12 @@ async function handle(name, args) {
                     return say(`❌ Not logged in on ${platformName}.`);
                 let text = `🔎 **Item resolution - ${platformName.toUpperCase()}** (nothing added to cart)\n`;
                 for (const q of queries) {
-                    const res = resolveItem(q, (await platform.search(q)).products);
+                    const searched = await searchForComparison(platformName, q);
+                    if ('error' in searched && searched.error) {
+                        text += `\n❌ ${q}: ${searched.error}\n`;
+                        continue;
+                    }
+                    const res = resolveItem(q, 'products' in searched ? searched.products : []);
                     const head = res.status === 'match' ? `✅ "${q}": matches found (pick one)`
                         : res.status === 'alternatives' ? `⚠️ "${q}": ${res.outOfStock ? 'exact match is out of stock' : 'no exact match'}; closest in-stock options (ask the user to choose)`
                             : `❌ "${q}": nothing in stock${res.outOfStock ? ' (exact match is out of stock)' : ''}; ask the user for a different item or platform`;
@@ -1085,18 +1102,23 @@ async function handle(name, args) {
                 for (const item of items) {
                     const query = item.preferredBrand ? `${item.preferredBrand} ${item.name}` : item.name;
                     const found = [];
-                    for (const platformName of ALL_PLATFORMS) {
-                        const r = await searchOn(platformName, query);
-                        if (!('error' in r))
-                            found.push(...relevant(query, r.products));
-                    }
-                    const ranked = rankByUnitPrice(found);
+                    const searches = await Promise.allSettled(ALL_PLATFORMS.map(platformName => searchForComparison(platformName, query)));
+                    const errors = new Map();
+                    searches.forEach((result, i) => {
+                        if (result.status === 'rejected')
+                            errors.set(ALL_PLATFORMS[i], String(result.reason));
+                        else if ('error' in result.value && result.value.error)
+                            errors.set(ALL_PLATFORMS[i], result.value.error);
+                        else if ('products' in result.value)
+                            found.push(...relevant(query, result.value.products));
+                    });
+                    const ranked = rankByPackPrice(found);
                     text += `**${query}** ×${item.quantity}\n`;
                     for (const platformName of ALL_PLATFORMS) {
                         const best = ranked.find(x => x.p.platform === platformName);
                         if (!best) {
                             missing.get(platformName).push(query);
-                            text += `- ${platformName}: not found\n`;
+                            text += `- ${platformName}: ${errors.get(platformName) ?? 'not found'}\n`;
                             continue;
                         }
                         basket.set(platformName, basket.get(platformName) + best.p.price * item.quantity);
@@ -1111,9 +1133,10 @@ async function handle(name, args) {
                 text += `🧺 **Whole basket on one platform**\n`;
                 for (const platformName of ALL_PLATFORMS) {
                     const miss = missing.get(platformName);
-                    text += `- ${platformName}: ₹${basket.get(platformName)}${miss.length ? ` (missing: ${miss.join(', ')})` : ''}\n`;
+                    text += `- ${platformName}: ${miss.length ? `incomplete (missing: ${miss.join(', ')})` : `₹${basket.get(platformName).toFixed(2)}`}\n`;
                 }
-                text += `\n🔀 **Cheapest split across platforms**: ₹${splitTotal}\n`;
+                text += `\n🔀 **Matched-item split subtotal**: ₹${splitTotal.toFixed(2)} (not a delivered total)\n`;
+                text += 'Quantity means sellable packs. Pack sizes can differ; review them before adding. Unit prices are informational. Delivery/handling fees must be verified at checkout.\n';
                 return {
                     content: [{ type: 'text', text }],
                 };

@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { unitPrice, relevant, rankByUnitPrice, resolveItem, validateCart, storeNotice } from './ranking.js';
+import { unitPrice, relevant, rankByUnitPrice, rankByPackPrice, searchQueries, resolveItem, validateCart, storeNotice } from './ranking.js';
 import { BlinkitPlatform, parseBill } from './platforms/blinkit.js';
 import { parseZeptoBill } from './platforms/zepto.js';
 import { parseInstamartBill } from './platforms/swiggy-instamart.js';
@@ -508,5 +508,23 @@ test("selfRepair: survives a page whose elements have ids", async () => {
     // And the selector it settled on has to be a valid one, not "#12345".
     if (r.selector)
         assert.doesNotMatch(r.selector, /#\d/, 'a bare digit id is not a valid CSS selector');
+});
+test('comparison matches Coke/Coca-Cola synonyms, apostrophes and separate pack sizes without matching brand footers', () => {
+    const products = [
+        { id: 'c', name: 'Coca-Cola Zero Sugar PET | The Coca-Cola Company', quantity: '750 ml', price: 38, inStock: true, platform: 'blinkit' },
+        { id: 's', name: 'Sprite Zero | The Coca-Cola Company', quantity: '750 ml', price: 20, inStock: true, platform: 'blinkit' },
+        { id: 'l', name: "Lay’s (Classic Salted) Potato Chips", quantity: '58 g', price: 20, inStock: true, platform: 'blinkit' },
+    ];
+    assert.deepEqual(relevant('Coke Zero', products).map(p => p.id), ['c']);
+    assert.deepEqual(relevant('Coca Cola Zero Sugar 750 ml', products).map(p => p.id), ['c']);
+    assert.deepEqual(relevant("Lay's Classic Salted", products).map(p => p.id), ['l']);
+});
+test('pack price drives basket spend even when a bulk pack has a cheaper unit price', () => {
+    const products = [
+        { id: 'bulk', name: 'Coca-Cola Zero', quantity: '8 x 250 ml', price: 160, inStock: true, platform: 'swiggy-instamart' },
+        { id: 'single', name: 'Coca-Cola Zero', quantity: '750 ml', price: 38, inStock: true, platform: 'blinkit' },
+    ];
+    assert.equal(rankByPackPrice(products)[0].p.id, 'single');
+    assert.deepEqual(searchQueries('Coca Cola Zero Sugar 750 ml'), ['Coca Cola Zero Sugar 750 ml', 'Coke Zero', 'Coca']);
 });
 //# sourceMappingURL=logic.test.js.map

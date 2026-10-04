@@ -43,7 +43,7 @@ function geolocationFix(): { latitude: number; longitude: number } | undefined {
   return { latitude: lat, longitude: lon };
 }
 
-/** Overrides the "chrome" channel; only used to point tests at a local build. */
+/** Explicit Chrome/Chromium executable override for local MCP deployments. */
 export const CHROME_PATH_ENV = 'QC_CHROME_PATH';
 
 export class StealthBrowser {
@@ -61,13 +61,12 @@ export class StealthBrowser {
       storageStatePath,
     } = config;
 
-    // Launch with anti-detection args. Uses the system-installed Google
-    // Chrome (channel: 'chrome') instead of Playwright's bundled Chromium,
-    // since downloading/extracting the bundled browser is impractically
-    // slow on machines with endpoint security scanning every written file.
-    // QC_CHROME_PATH takes precedence over the "chrome" channel, for pointing at
-    // a Chrome/Chromium build Playwright's channel lookup can't find.
+    // Prefer an explicit executable, then an already-installed Playwright build.
+    // Fresh MCP clients must not depend on another client's environment override.
+    // Retain the system Chrome channel when no bundled browser is installed.
     const chromePath = process.env[CHROME_PATH_ENV]?.trim();
+    const bundledPath = chromium.executablePath();
+    const executablePath = chromePath || (fs.existsSync(bundledPath) ? bundledPath : undefined);
     if (config.cdpEndpoint) {
       const endpoint = new URL(config.cdpEndpoint);
       if (!config.desktop || endpoint.protocol !== 'http:' || !['localhost', '127.0.0.1', '[::1]'].includes(endpoint.hostname) || endpoint.username || endpoint.password || endpoint.pathname !== '/' || endpoint.search || endpoint.hash) {
@@ -84,7 +83,7 @@ export class StealthBrowser {
       fs.mkdirSync(config.userDataDir, { recursive: true, mode: 0o700 });
       fs.chmodSync(config.userDataDir, 0o700);
       this.context = await chromium.launchPersistentContext(config.userDataDir, {
-        ...(chromePath ? { executablePath: chromePath } : { channel: 'chrome' as const }),
+        ...(executablePath ? { executablePath } : { channel: 'chrome' as const }),
         headless, slowMo, viewport, deviceScaleFactor: 1, isMobile: false, hasTouch: false,
         locale: 'en-IN', timezoneId: 'Asia/Kolkata',
         proxy: proxy ? { server: proxy } : undefined,
@@ -94,7 +93,7 @@ export class StealthBrowser {
       return this.context;
     }
     this.browser = await chromium.launch({
-      ...(chromePath ? { executablePath: chromePath } : { channel: 'chrome' as const }),
+      ...(executablePath ? { executablePath } : { channel: 'chrome' as const }),
       headless,
       slowMo,
       proxy: proxy ? { server: proxy } : undefined,

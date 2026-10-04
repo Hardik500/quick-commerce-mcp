@@ -6,6 +6,15 @@ export declare function unitPrice(p: Product): {
     label: string;
 };
 export declare function relevant(query: string, products: Product[]): Product[];
+/** Pack count is a shopping quantity; unit value is shown but is not the spend. */
+export declare function rankByPackPrice(products: Product[]): {
+    p: Product;
+    u: {
+        value: number;
+        label: string;
+    };
+}[];
+export declare function searchQueries(query: string): string[];
 export interface Resolution {
     query: string;
     status: 'match' | 'alternatives' | 'none';

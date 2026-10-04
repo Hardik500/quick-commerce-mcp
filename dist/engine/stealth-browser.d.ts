@@ -19,7 +19,7 @@ export interface StealthConfig {
     /** Attach to a user-controlled local interactive Chrome browser. */
     cdpEndpoint?: string;
 }
-/** Overrides the "chrome" channel; only used to point tests at a local build. */
+/** Explicit Chrome/Chromium executable override for local MCP deployments. */
 export declare const CHROME_PATH_ENV = "QC_CHROME_PATH";
 export declare class StealthBrowser {
     private browser;

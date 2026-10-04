@@ -165,14 +165,19 @@ If MCP is connected, you'll see results from the platform searches.
 - Ensure `dist/index.js` exists
 
 ### "Browser automation fails"
-- This server drives your **installed Google Chrome** via Playwright's `chrome` channel, not Playwright's bundled Chromium. There is no browser to download — `npx playwright install chromium` installs something this server never launches.
+- The server uses `QC_CHROME_PATH` when set, otherwise an installed Playwright Chromium build, otherwise system Google Chrome. Install a bundled build with `npx playwright install chromium` when system Chrome is unavailable.
 - If Chrome is installed somewhere unusual, point at it explicitly with the `QC_CHROME_PATH` env var in the server config (it takes precedence over the channel lookup):
 
 ```json
 "env": { "QC_CHROME_PATH": "C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe" }
 ```
 
-- On Linux you may also need Chrome's own shared libraries: `npx playwright install-deps chromium`
+- On Linux you may also need browser shared libraries: `npx playwright install-deps chromium`
+
+### Browser visibility with Claude and other clients
+
+Browser automation runs in the local MCP server process, independently of the client UI. Zepto, Blinkit and Instamart normally launch headless browsers. BigBasket currently uses a dedicated visible Windows browser bridge when its headless login or listing requests are blocked. The bridge is a separate local setup step; it is not automatically launched by Claude and is not bundled in the published package. A cloud-hosted MCP deployment cannot attach to this local browser. Headless BigBasket operation has not been verified for this account. See [AUTHENTICATION.md](AUTHENTICATION.md) for the interactive setup.
+
 
 ### MCP not appearing in client
 - Restart the client completely

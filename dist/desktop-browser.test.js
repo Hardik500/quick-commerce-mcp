@@ -97,4 +97,30 @@ test('interactive attachment rejects remote endpoints and URLs containing creden
         await assert.rejects(new StealthBrowser().launch({ desktop: true, cdpEndpoint: endpoint }), /loopback HTTP/);
     }
 });
+test('fresh MCP clients launch installed Chromium without a client-specific executable override', async () => {
+    const previous = process.env[CHROME_PATH_ENV];
+    delete process.env[CHROME_PATH_ENV];
+    const profile = mkdtempSync(join(tmpdir(), 'qc-default-profile-'));
+    try {
+        for (const userDataDir of [undefined, profile]) {
+            const browser = new StealthBrowser();
+            try {
+                const context = await browser.launch({ desktop: true, headless: true, slowMo: 0, userDataDir });
+                const page = await context.newPage();
+                await page.setContent('<p>Fresh MCP browser</p>');
+                assert.equal(await page.textContent('p'), 'Fresh MCP browser');
+            }
+            finally {
+                await browser.close();
+            }
+        }
+    }
+    finally {
+        rmSync(profile, { recursive: true, force: true });
+        if (previous === undefined)
+            delete process.env[CHROME_PATH_ENV];
+        else
+            process.env[CHROME_PATH_ENV] = previous;
+    }
+});
 //# sourceMappingURL=desktop-browser.test.js.map

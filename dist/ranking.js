@@ -28,21 +28,33 @@ export function unitPrice(p) {
     return { value: p.price / amount, label: 'pc' };
 }
 // In-stock products whose name contains every query word.
-// ponytail: literal word match ("coke" won't match "Coca-Cola"); add synonyms if it bites.
+// Includes known brand synonyms and separately displayed pack sizes.
 export function relevant(query, products) {
-    const words = query.toLowerCase().split(/\s+/).filter(w => w.length > 1).map(w => w.replace(/s$/, ''));
-    return products.filter(p => p.inStock && words.every(w => p.name.toLowerCase().includes(w)));
+    const words = queryWords(query);
+    return products.filter(p => p.inStock && words.every(w => hits(productText(p), w)));
+}
+const normalized = (value) => value.toLowerCase().replace(/[’']/g, '').replace(/[^a-z0-9]+/g, ' ').trim();
+const queryWords = (query) => normalized(query).split(/\s+/).filter(w => w.length > 1).map(w => w.replace(/s$/, ''));
+const productText = (p) => normalized(p.name.split('|')[0] + ' ' + p.quantity);
+/** Pack count is a shopping quantity; unit value is shown but is not the spend. */
+export function rankByPackPrice(products) {
+    return products.filter(p => p.inStock && Number.isFinite(p.price) && p.price > 0)
+        .map(p => ({ p, u: unitPrice(p) })).sort((a, b) => a.p.price - b.p.price);
+}
+export function searchQueries(query) {
+    const short = /(?:coca[ -]?cola|coke).*zero/i.test(query) ? 'Coke Zero' : query.trim().split(/\s+/).slice(0, 2).join(' ');
+    return [...new Set([query.trim(), short, query.trim().split(/\s+/)[0]])].filter(Boolean);
 }
 // ponytail: tiny hand-made synonym table; extend when a real query misses.
 const SYNONYMS = { coke: ['coca-cola', 'coca cola'], pepsi: ['pepsi'], curd: ['dahi'], dahi: ['curd'] };
-const hits = (name, word) => [word, ...(SYNONYMS[word] ?? [])].some(w => name.includes(w));
+const hits = (name, word) => [word, ...(SYNONYMS[word] ?? [])].some(w => name.includes(normalized(w)));
 // Exact = every query word present and in stock. Otherwise offer in-stock
 // partial matches (most words matched first, then cheapest unit price).
 export function resolveItem(query, products, max = 5) {
-    const words = query.toLowerCase().split(/\s+/).filter(w => w.length > 1).map(w => w.replace(/s$/, ''));
+    const words = queryWords(query);
     const seen = new Set();
     products = products.filter(p => { const k = `${p.name}|${p.quantity}`; return !seen.has(k) && !!seen.add(k); });
-    const scored = products.map(p => ({ p, n: words.filter(w => hits(p.name.toLowerCase().split('|')[0], w)).length })); // title only: Zepto names end with "| The Coca-Cola Company"
+    const scored = products.map(p => ({ p, n: words.filter(w => hits(productText(p), w)).length })); // title only: Zepto names end with "| The Coca-Cola Company"
     const exact = scored.filter(x => x.n === words.length);
     const byPrice = (a, b) => unitPrice(a.p).value - unitPrice(b.p).value;
     const exactIn = exact.filter(x => x.p.inStock).sort(byPrice).map(x => x.p);

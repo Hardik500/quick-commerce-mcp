@@ -176,7 +176,7 @@ If MCP is connected, you'll see results from the platform searches.
 
 ### Browser visibility with Claude and other clients
 
-Browser automation runs in the local MCP server process, independently of the client UI. Zepto, Blinkit and Instamart normally launch headless browsers. BigBasket currently rejects true headless browsing for the tested account. Its Windows bridge defaults to an invisible background mode: normal Chrome runs on an isolated Windows desktop. This is not true headless, but live saved-login, search, cart and checkout checks work without a browser window on the user desktop. Use `QC_BIGBASKET_BROWSER_MODE=visible` for explicit login recovery, or `headless` for experiments. The bridge is a separate local setup step; it is not automatically launched by Claude and is not bundled in the published package. A cloud-hosted MCP deployment cannot attach to this local browser. True headless BigBasket tests were blocked; background payment submission and fresh OTP login remain unverified. See [AUTHENTICATION.md](AUTHENTICATION.md) for the interactive setup.
+Browser automation runs in the local MCP server process, independently of the client UI. Zepto, Blinkit and Instamart normally launch headless browsers. BigBasket currently rejects true headless browsing for the tested account. Its Windows bridge defaults to an invisible background mode: normal Chrome runs on an isolated Windows desktop. This is not true headless, but live saved-login, search, cart and checkout checks work without a browser window on the user desktop. Use `QC_BIGBASKET_BROWSER_MODE=visible` for explicit login recovery, or `headless` for experiments. The bridge is a separate local setup step; it is not automatically launched by Claude. Its scripts are bundled starting with 1.6.0; the portable recovery command described below is added after 1.6.0. A cloud-hosted MCP deployment cannot attach to this local browser. True headless BigBasket tests were blocked; background payment submission and fresh OTP login remain unverified. See [AUTHENTICATION.md](AUTHENTICATION.md) for the interactive setup.
 
 
 ### Windows Claude using an outdated checkout
@@ -247,3 +247,40 @@ It never asks for or stores a card number, PIN, or UPI PIN.
 ---
 
 **Setup complete!** Try asking Claude: "Search for Coke Zero on both Zepto and Swiggy"
+
+### BigBasket blocked-browser recovery (issue #1)
+
+BigBasket may refuse the default headless browser even with a correct OTP.
+Logging in to your normal browser or an incognito window does **not** log MCP
+in: it uses a separate profile. Do not keep requesting OTPs on a blocked page.
+
+Install the browser once with `npx playwright install chromium`, then keep a
+separate terminal running:
+
+```sh
+npx -y --package=quick-commerce-mcp quick-commerce-mcp-bigbasket-browser
+```
+
+Restart Claude Desktop (or reconnect your MCP client) after the helper reports
+ready. MCP automatically attaches to that dedicated browser. Ask the assistant
+to check BigBasket login, then supply your phone number, pincode and a fresh OTP
+only if requested. Keep the terminal running throughout shopping.
+
+On native Windows this command defaults to an invisible isolated desktop.
+On macOS/Linux it opens a visible browser; true headless access is not assured.
+If a challenge requires manual interaction, stop the helper and rerun it with
+`--visible`. Complete the check **in that dedicated browser**, then reconnect MCP.
+Use the same OS account and environment for the helper and MCP; a Windows
+helper does not publish its endpoint into a WSL home directory. WSL deployments
+must use the Windows bridge described in the README. `QC_CHROME_PATH` can select
+an installed Chrome executable instead of Playwright Chromium. The background
+helper does not require Codex or a Codex-managed Node installation.
+
+This recovery command is added after 1.6.0; it requires the next release or the
+current source checkout (`node scripts/open-bigbasket-browser.mjs`). Do not
+assume an older cached `npx` package includes it. Fresh Windows background startup, MCP-compatible browser attachment and the
+logged-out BigBasket login button were verified with a temporary profile on
+2026-10-05. The isolated desktop now starts on a blank page before MCP navigates,
+avoiding the fresh-profile attachment timeout observed when it launched directly
+into BigBasket. Fresh OTP login and actual payments remain separate live checks; successful browser attachment alone is
+not proof that BigBasket accepted the session.

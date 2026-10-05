@@ -6,7 +6,8 @@
   "type": "module",
   "bin": {
     "quick-commerce-mcp": "dist/index.js",
-    "quick-commerce-mcp-login": "dist/session-helper.js"
+    "quick-commerce-mcp-login": "dist/session-helper.js",
+    "quick-commerce-mcp-bigbasket-browser": "scripts/open-bigbasket-browser.mjs"
   },
   "files": [
     "dist",

@@ -5,6 +5,9 @@ import { mkdirSync, readFileSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createInterface } from 'node:readline';
+import { createRequire } from 'node:module';
+const require = createRequire(import.meta.url);
+const { ws: WebSocket } = require(require.resolve('playwright-core/lib/utilsBundle'));
 import { bigBasketBrowserArgs } from '../dist/browser-runtime.js';
 const [executable, profile, mode] = process.argv.slice(2);
 if (!['headless', 'visible', 'background'].includes(mode)) throw new Error('Explicit browser mode required.');
@@ -17,6 +20,7 @@ const chrome = mode === 'background'
       fileURLToPath(new URL('./bigbasket-background-desktop.ps1', import.meta.url)), '-BrowserPath', executable, '-ProfilePath', profile],
     { stdio: ['ignore', 'pipe', 'inherit'], windowsHide: true })
   : spawn(executable, [...args, 'about:blank'], { stdio: 'ignore', windowsHide: true });
+chrome.once('exit', code => process.exit(code ?? 0));
 let isolated = false;
 const isolatedReady = mode === 'background' ? new Promise((resolve, reject) => {
   const timer = setTimeout(() => reject(new Error('Isolated browser desktop did not become ready.')), 20000);
@@ -47,7 +51,7 @@ for await (const line of createInterface({ input: process.stdin })) {
     const socket = new WebSocket(version.webSocketDebuggerUrl);
     const entry = { socket, queue: [] }; sockets.set(message.id, entry);
     socket.addEventListener('open', () => { for (const frame of entry.queue) socket.send(frame); entry.queue = []; });
-    socket.addEventListener('message', event => send({ kind: 'frame', id: message.id, data: event.data }));
+    socket.addEventListener('message', event => send({ kind: 'frame', id: message.id, data: String(event.data) }));
     socket.addEventListener('close', () => { sockets.delete(message.id); send({ kind: 'close', id: message.id }); });
     socket.addEventListener('error', () => send({ kind: 'close', id: message.id }));
   } else if (message.kind === 'frame') {

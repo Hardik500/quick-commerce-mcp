@@ -48,7 +48,7 @@ try {
   $startup.cb = [Runtime.InteropServices.Marshal]::SizeOf($startup)
   $startup.desktop = 'WinSta0\' + $name
   $command = New-Object Text.StringBuilder
-  [void]$command.Append('"' + $BrowserPath + '" --user-data-dir="' + $ProfilePath + '" --remote-debugging-port=0 --remote-debugging-address=127.0.0.1 --no-first-run --no-default-browser-check --disable-backgrounding-occluded-windows --disable-renderer-backgrounding --disable-background-timer-throttling https://www.bigbasket.com')
+  [void]$command.Append('"' + $BrowserPath + '" --user-data-dir="' + $ProfilePath + '" --remote-debugging-port=0 --remote-debugging-address=127.0.0.1 --no-first-run --no-default-browser-check --disable-backgrounding-occluded-windows --disable-renderer-backgrounding --disable-background-timer-throttling about:blank')
   if (-not [QcDesktop]::CreateProcess($BrowserPath, $command, [IntPtr]::Zero, [IntPtr]::Zero, $false, 0, [IntPtr]::Zero, [IO.Path]::GetDirectoryName($BrowserPath), [ref]$startup, [ref]$process)) { throw ('Could not launch isolated browser: Win32 ' + [Runtime.InteropServices.Marshal]::GetLastWin32Error()) }
   [void][QcDesktop]::CloseHandle($process.thread)
   $ready = $false

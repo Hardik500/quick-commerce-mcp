@@ -6,7 +6,9 @@ import { mkdirSync, writeFileSync, readFileSync, rmSync, readdirSync, chmodSync 
 import { join } from 'node:path';
 import { browserProfilePath } from '../dist/session-helper.js';
 import { bigBasketBrowserMode } from '../dist/browser-runtime.js';
-import bundle from '../node_modules/playwright-core/lib/utilsBundle.js';
+import { createRequire } from 'node:module';
+const require = createRequire(import.meta.url);
+const bundle = require('playwright-core/lib/utilsBundle');
 
 // Only loopback is exposed. No CDP frames, cookies or credentials are logged.
 const windows = path => execFileSync('wslpath', ['-w', path], { encoding: 'utf8' }).trim();
@@ -15,7 +17,9 @@ const home = execFileSync('wslpath', ['-u', windowsHome], { encoding: 'utf8' }).
 const runtime = join(home, '.quick-commerce-mcp/browser-runtime');
 const revisions = readdirSync(runtime).filter(name => /^chromium-\d+$/.test(name)).sort((a, b) => Number(b.split('-')[1]) - Number(a.split('-')[1]));
 if (!revisions.length) throw new Error('Install the Windows Playwright Chromium runtime first; see README.');
-const windowsNode = process.env.QC_WINDOWS_NODE_PATH ?? join(home, '.cache/codex-runtimes/codex-primary-runtime/dependencies/node/bin/node.exe');
+const nodeCandidate = process.env.QC_WINDOWS_NODE_PATH ?? execFileSync('cmd.exe', ['/d', '/c', 'where', 'node.exe'], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }).trim().split(/\r?\n/)[0];
+if (!nodeCandidate) throw new Error('Install Node.js on Windows or set QC_WINDOWS_NODE_PATH to node.exe.');
+const windowsNode = /^[a-z]:/i.test(nodeCandidate) ? execFileSync('wslpath', ['-u', nodeCandidate], { encoding: 'utf8' }).trim() : nodeCandidate;
 const executable = process.env.QC_WINDOWS_BROWSER_PATH ?? join(runtime, revisions[0], 'chrome-win64/chrome.exe');
 const profile = join(home, '.quick-commerce-mcp/profiles/bigbasket');
 const worker = spawn(windowsNode, [windows(fileURLToPath(new URL('./bigbasket-windows-worker.mjs', import.meta.url))),

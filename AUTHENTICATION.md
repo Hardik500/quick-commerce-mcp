@@ -180,3 +180,36 @@ without requesting another OTP. One separate clean run timed out waiting for
 login controls, so initial site loading can still fail. These checks apply to
 the Windows recovery route, not true headless browsing or all operating systems.
 Actual payment submission remains untested in this recovery route.
+
+### Linux and macOS recovery verification (2026-10-05)
+
+A clean candidate tarball installation was checked in Ubuntu 24.04 WSL x86-64
+using Node 24 and freshly downloaded native Linux Chromium (Playwright 1.63.0).
+No Windows executable, Windows bridge, `QC_CHROME_PATH`, or custom CDP URL was
+used. The ordinary headless MCP route was blocked by BigBasket. The recovery
+helper on an Xvfb virtual display started successfully, published a private
+loopback endpoint, attached through a fresh stdio MCP connection, and reached
+the login phone form. Profile permissions were `0700`; endpoint permissions
+were `0600`. BigBasket then rejected the single OTP request with HTTP 400 and
+did not show an OTP screen. Linux login completion and persistence are therefore
+**not verified**. The status alone does not establish why the server rejected it.
+
+On Linux, an Xvfb display keeps headed Chromium off the user desktop:
+
+```sh
+# Stop the existing MCP server first. On Ubuntu, install xvfb and xauth if absent.
+xvfb-run -a npx -y --package=quick-commerce-mcp quick-commerce-mcp-bigbasket-browser
+```
+
+Keep the wrapper running while MCP attaches. This is headed Chromium on a
+virtual display; access and login still depend on BigBasket's site checks.
+The recovery executable requires the upcoming release or a source checkout;
+published 1.6.0 does not expose that executable.
+
+macOS uses the native Playwright Chromium executable and a dedicated visible
+browser, without the Windows PowerShell desktop helper. Playwright currently
+supports macOS 14 or later; use a supported Node release such as Node 24
+([system requirements](https://playwright.dev/docs/intro#system-requirements)).
+The validation workflow now runs the build and browser regressions on both
+Ubuntu and a native macOS runner. Fixture tests do not establish live BigBasket
+login acceptance. A fresh Mac login still needs on-device verification.

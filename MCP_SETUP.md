@@ -176,7 +176,7 @@ If MCP is connected, you'll see results from the platform searches.
 
 ### Browser visibility with Claude and other clients
 
-Browser automation runs in the local MCP server process, independently of the client UI. Zepto, Blinkit and Instamart normally launch headless browsers. BigBasket currently rejects true headless browsing for the tested account. Its Windows bridge defaults to an invisible background mode: normal Chrome runs on an isolated Windows desktop. This is not true headless, but live saved-login, search, cart and checkout checks work without a browser window on the user desktop. Use `QC_BIGBASKET_BROWSER_MODE=visible` for explicit login recovery, or `headless` for experiments. The bridge is a separate local setup step; it is not automatically launched by Claude. Its scripts are bundled starting with 1.6.0; the portable recovery command described below is added after 1.6.0. A cloud-hosted MCP deployment cannot attach to this local browser. True headless BigBasket tests were blocked; background payment submission and fresh OTP login remain unverified. See [AUTHENTICATION.md](AUTHENTICATION.md) for the interactive setup.
+Browser automation runs in the local MCP server process, independently of the client UI. Zepto, Blinkit and Instamart normally launch headless browsers. BigBasket currently rejects true headless browsing for the tested account. Its Windows bridge defaults to an invisible background mode: normal Chrome runs on an isolated Windows desktop. This is not true headless, but live saved-login, search, cart and checkout checks work without a browser window on the user desktop. Use `QC_BIGBASKET_BROWSER_MODE=visible` for explicit login recovery, or `headless` for experiments. The bridge is a separate local setup step; it is not automatically launched by Claude. Its scripts are bundled starting with 1.6.0; the portable recovery command described below is added after 1.6.0. A cloud-hosted MCP deployment cannot attach to this local browser. True headless BigBasket tests were blocked; background payment submission remains unverified; clean Windows OTP login and browser/MCP restart persistence were verified on 2026-10-05 as described below. See [AUTHENTICATION.md](AUTHENTICATION.md) for the interactive setup.
 
 
 ### Windows Claude using an outdated checkout
@@ -254,14 +254,15 @@ BigBasket may refuse the default headless browser even with a correct OTP.
 Logging in to your normal browser or an incognito window does **not** log MCP
 in: it uses a separate profile. Do not keep requesting OTPs on a blocked page.
 
-Install the browser once with `npx playwright install chromium`, then keep a
-separate terminal running:
+Install the browser once with `npx playwright install chromium`. **Fully quit
+Claude Desktop or stop the MCP server first**, so its headless browser releases
+the dedicated profile. Then keep a separate terminal running:
 
 ```sh
 npx -y --package=quick-commerce-mcp quick-commerce-mcp-bigbasket-browser
 ```
 
-Restart Claude Desktop (or reconnect your MCP client) after the helper reports
+Reopen Claude Desktop (or reconnect your MCP client) after the helper reports
 ready. MCP automatically attaches to that dedicated browser. Ask the assistant
 to check BigBasket login, then supply your phone number, pincode and a fresh OTP
 only if requested. Keep the terminal running throughout shopping.
@@ -282,5 +283,12 @@ assume an older cached `npx` package includes it. Fresh Windows background start
 logged-out BigBasket login button were verified with a temporary profile on
 2026-10-05. The isolated desktop now starts on a blank page before MCP navigates,
 avoiding the fresh-profile attachment timeout observed when it launched directly
-into BigBasket. Fresh OTP login and actual payments remain separate live checks; successful browser attachment alone is
-not proof that BigBasket accepted the session.
+into BigBasket. A clean native Windows installation of the candidate tarball was also tested
+with freshly downloaded Chromium, without QC_CHROME_PATH or a custom CDP URL.
+MCP sent one OTP, completed login, and returned the saved Bangalore address.
+A fresh MCP process preserved the pending OTP screen; after verification, a
+complete browser restart plus another fresh MCP process remained logged in
+without requesting another OTP. One separate clean run timed out waiting for
+login controls, so initial site loading can still fail. These checks apply to
+the Windows recovery route, not true headless browsing or all operating systems.
+Actual payment submission remains untested in this recovery route.

@@ -5,6 +5,7 @@ import { promisify } from 'node:util';
 import { mkdtemp, writeFile, readFile, rm, access } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { pathToFileURL } from 'node:url';
 import { once } from 'node:events';
 import { chromium } from 'playwright';
 import { BigBasketPlatform } from './platforms/bigbasket.js';
@@ -34,7 +35,7 @@ test('published recovery helper registers a private attachable endpoint and remo
   const home = await mkdtemp(join(tmpdir(), 'qc-recovery-'));
   const shim = join(home, 'home.mjs');
   await writeFile(shim, `import os from 'node:os'; import { syncBuiltinESMExports } from 'node:module'; os.homedir = () => ${JSON.stringify(home)}; syncBuiltinESMExports();`);
-  const child = spawn(process.execPath, ['--import', shim, 'scripts/open-bigbasket-browser.mjs'], {
+  const child = spawn(process.execPath, ['--import', pathToFileURL(shim).href, 'scripts/open-bigbasket-browser.mjs'], {
     env: { ...process.env, QC_BIGBASKET_BROWSER_MODE: 'headless', QC_CHROME_PATH: chromium.executablePath() },
     stdio: ['ignore', 'pipe', 'pipe'],
   });
@@ -53,7 +54,7 @@ test('published recovery helper registers a private attachable endpoint and remo
       await page.goto('data:text/html,<title>Dedicated recovery</title>');
       assert.equal(await page.title(), 'Dedicated recovery');
     } finally { await browser.close(); }
-    await assert.rejects(promisify(execFile)(process.execPath, ['--import', shim, 'scripts/open-bigbasket-browser.mjs'], { env: { ...process.env, QC_BIGBASKET_BROWSER_MODE: 'headless', QC_CHROME_PATH: chromium.executablePath() }, timeout: 5000 }), /already running/);
+    await assert.rejects(promisify(execFile)(process.execPath, ['--import', pathToFileURL(shim).href, 'scripts/open-bigbasket-browser.mjs'], { env: { ...process.env, QC_BIGBASKET_BROWSER_MODE: 'headless', QC_CHROME_PATH: chromium.executablePath() }, timeout: 5000 }), /already running/);
     assert.equal(JSON.parse(await readFile(registry, 'utf8')).endpoint, record.endpoint);
     // Another browser can replace the registry before this helper shuts down.
     await writeFile(registry, JSON.stringify({ endpoint: 'http://127.0.0.1:1' }));
@@ -64,4 +65,21 @@ test('published recovery helper registers a private attachable endpoint and remo
     if (child.exitCode === null && child.signalCode === null) { child.kill('SIGTERM'); await closed; }
     await rm(home, { recursive: true, force: true });
   }
+});
+
+
+test('recovery refuses an already-owned profile without deleting its active debugging port or closing it', async () => {
+  const home = await mkdtemp(join(tmpdir(), 'qc-owned-recovery-'));
+  const shim = join(home, 'home.mjs');
+  await writeFile(shim, `import os from 'node:os'; import { syncBuiltinESMExports } from 'node:module'; os.homedir = () => ${JSON.stringify(home)}; syncBuiltinESMExports();`);
+  const profile = join(home, '.quick-commerce-mcp/profiles/bigbasket');
+  const context = await chromium.launchPersistentContext(profile, { headless: true, args: ['--remote-debugging-port=0'] });
+  try {
+    const page = context.pages()[0];
+    await page.goto('data:text/html,<title>Original owner</title>');
+    const activePort = await readFile(join(profile, 'DevToolsActivePort'), 'utf8');
+    await assert.rejects(promisify(execFile)(process.execPath, ['--import', pathToFileURL(shim).href, 'scripts/open-bigbasket-browser.mjs'], { env: { ...process.env, QC_BIGBASKET_BROWSER_MODE: 'headless', QC_CHROME_PATH: chromium.executablePath() }, timeout: 5000 }), /Fully quit Claude/);
+    assert.equal(await readFile(join(profile, 'DevToolsActivePort'), 'utf8'), activePort);
+    assert.equal(await page.title(), 'Original owner');
+  } finally { await context.close(); await rm(home, { recursive: true, force: true }); }
 });

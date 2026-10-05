@@ -9,7 +9,7 @@ import { browserProfilePath } from '../dist/session-helper.js';
 import { bigBasketBrowserArgs } from '../dist/browser-runtime.js';
 
 if (process.argv.includes('--help')) {
-  console.log('Usage: quick-commerce-mcp-bigbasket-browser [--visible]\nWindows defaults to an isolated background desktop; other systems use a visible dedicated browser. Keep this terminal running and restart your MCP client. Install Chromium with npx playwright install chromium, or set QC_CHROME_PATH. Login in an unrelated browser is not shared with MCP.');
+  console.log('Usage: quick-commerce-mcp-bigbasket-browser [--visible]\nWindows defaults to an isolated background desktop; other systems use a visible dedicated browser. Fully quit your MCP client before starting this helper, then reopen it after readiness. Keep this terminal running. Install Chromium with npx playwright install chromium, or set QC_CHROME_PATH. Login in an unrelated browser is not shared with MCP.');
   process.exit(0);
 }
 const mode = process.argv.includes('--visible') ? 'visible' : (process.env.QC_BIGBASKET_BROWSER_MODE ?? (process.platform === 'win32' ? 'background' : 'visible'));
@@ -28,6 +28,15 @@ try {
     if ((await fetch(new URL('/json/version', url), { signal: AbortSignal.timeout(1500) })).ok) throw new Error('BigBasket recovery browser is already running. Keep its terminal open; restart MCP to attach, or close that browser before changing modes.');
   }
 } catch (error) { if (error.message?.includes('already running')) throw error; }
+// Refuse to take over an active dedicated profile, including an owner that has
+// not published our registry. Never delete a live browser's discovery file.
+try {
+  const port = Number(readFileSync(join(profile, 'DevToolsActivePort'), 'utf8').split('\n')[0]);
+  if (Number.isInteger(port) && port > 0 && port <= 65535 &&
+      (await fetch(`http://127.0.0.1:${port}/json/version`, { signal: AbortSignal.timeout(1500) })).ok) {
+    throw new Error('Another browser is using the dedicated BigBasket profile. Fully quit Claude/the MCP server and close that dedicated browser before starting recovery.');
+  }
+} catch (error) { if (error.message?.includes('using the dedicated')) throw error; }
 try { rmSync(join(profile, 'DevToolsActivePort')); } catch { /* no old endpoint */ }
 const browser = mode === 'background'
   ? spawn(process.execPath, [fileURLToPath(new URL('./bigbasket-windows-worker.mjs', import.meta.url)), executable, profile, mode], { stdio: ['pipe', 'pipe', 'inherit'], windowsHide: true })
@@ -54,7 +63,7 @@ browser.once('exit', clearRegistry);
 try {
   for (let attempt = 0; attempt < 200 && !endpoint; attempt++) {
     if (launchError) throw launchError;
-    if (browser.exitCode !== null) throw new Error('Chrome exited. Close any other browser using the dedicated BigBasket profile before retrying.');
+    if (browser.exitCode !== null) throw new Error('Chrome exited. Fully quit Claude/the MCP server and close any browser using the dedicated BigBasket profile before starting recovery; the helper cannot take over a running profile.');
     try {
       const port = Number(readFileSync(join(profile, 'DevToolsActivePort'), 'utf8').split('\n')[0]);
       if (isolated && Number.isInteger(port) && port > 0 && port <= 65535) {

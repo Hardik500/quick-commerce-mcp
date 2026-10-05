@@ -142,14 +142,15 @@ BigBasket may refuse the default headless browser even with a correct OTP.
 Logging in to your normal browser or an incognito window does **not** log MCP
 in: it uses a separate profile. Do not keep requesting OTPs on a blocked page.
 
-Install the browser once with `npx playwright install chromium`, then keep a
-separate terminal running:
+Install the browser once with `npx playwright install chromium`. **Fully quit
+Claude Desktop or stop the MCP server first**, so its headless browser releases
+the dedicated profile. Then keep a separate terminal running:
 
 ```sh
 npx -y --package=quick-commerce-mcp quick-commerce-mcp-bigbasket-browser
 ```
 
-Restart Claude Desktop (or reconnect your MCP client) after the helper reports
+Reopen Claude Desktop (or reconnect your MCP client) after the helper reports
 ready. MCP automatically attaches to that dedicated browser. Ask the assistant
 to check BigBasket login, then supply your phone number, pincode and a fresh OTP
 only if requested. Keep the terminal running throughout shopping.
@@ -170,5 +171,12 @@ assume an older cached `npx` package includes it. Fresh Windows background start
 logged-out BigBasket login button were verified with a temporary profile on
 2026-10-05. The isolated desktop now starts on a blank page before MCP navigates,
 avoiding the fresh-profile attachment timeout observed when it launched directly
-into BigBasket. Fresh OTP login and actual payments remain separate live checks; successful browser attachment alone is
-not proof that BigBasket accepted the session.
+into BigBasket. A clean native Windows installation of the candidate tarball was also tested
+with freshly downloaded Chromium, without QC_CHROME_PATH or a custom CDP URL.
+MCP sent one OTP, completed login, and returned the saved Bangalore address.
+A fresh MCP process preserved the pending OTP screen; after verification, a
+complete browser restart plus another fresh MCP process remained logged in
+without requesting another OTP. One separate clean run timed out waiting for
+login controls, so initial site loading can still fail. These checks apply to
+the Windows recovery route, not true headless browsing or all operating systems.
+Actual payment submission remains untested in this recovery route.

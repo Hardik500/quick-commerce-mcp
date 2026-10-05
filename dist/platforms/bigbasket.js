@@ -35,7 +35,7 @@ export class BigBasketPlatform extends QuickCommercePlatform {
         if (!this.page)
             throw new Error('Platform not initialized');
         if (/access denied|verify you are human/i.test(await this.page.locator('body').innerText())) {
-            throw new Error('BigBasket blocked this browser. Do not request another OTP or tell the user to log in to an unrelated browser; it does not share the MCP profile. Run npx -y --package=quick-commerce-mcp quick-commerce-mcp-bigbasket-browser in a separate terminal, keep it running, and restart the MCP client to attach. Windows uses an invisible background desktop; macOS/Linux opens a dedicated visible browser. Use --visible if a site check requires interaction. Then retry check_login_status/login. True headless BigBasket browsing can be blocked.');
+            throw new Error('BigBasket blocked this browser. Do not request another OTP or tell the user to log in to an unrelated browser; it does not share the MCP profile. Fully quit Claude/the MCP server first so its browser releases the dedicated profile. Then run npx -y --package=quick-commerce-mcp quick-commerce-mcp-bigbasket-browser in a separate terminal, keep it running, and restart the MCP client to attach. Windows uses an invisible background desktop; macOS/Linux opens a dedicated visible browser. Use --visible if a site check requires interaction. Then retry check_login_status/login. True headless BigBasket browsing can be blocked.');
         }
     }
     async checkLogin() {

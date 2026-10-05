@@ -176,7 +176,7 @@ If MCP is connected, you'll see results from the platform searches.
 
 ### Browser visibility with Claude and other clients
 
-Browser automation runs in the local MCP server process, independently of the client UI. Zepto, Blinkit and Instamart normally launch headless browsers. BigBasket currently rejects true headless browsing for the tested account. Its Windows bridge defaults to an invisible background mode: normal Chrome runs on an isolated Windows desktop. This is not true headless, but live saved-login, search, cart and checkout checks work without a browser window on the user desktop. Use `QC_BIGBASKET_BROWSER_MODE=visible` for explicit login recovery, or `headless` for experiments. The bridge is a separate local setup step; it is not automatically launched by Claude. Its scripts are bundled starting with 1.6.0; the portable recovery command described below is added after 1.6.0. A cloud-hosted MCP deployment cannot attach to this local browser. True headless BigBasket tests were blocked; background payment submission remains unverified; clean Windows OTP login and browser/MCP restart persistence were verified on 2026-10-05 as described below. See [AUTHENTICATION.md](AUTHENTICATION.md) for the interactive setup.
+Browser automation runs in the local MCP server process, independently of the client UI. Zepto, Blinkit and Instamart normally launch headless browsers. BigBasket currently rejects true headless browsing for the tested account. Its Windows bridge defaults to an invisible background mode: normal Chrome runs on an isolated Windows desktop. This is not true headless, but live saved-login, search, cart and checkout checks work without a browser window on the user desktop. Use `QC_BIGBASKET_BROWSER_MODE=visible` for explicit login recovery, or `headless` for experiments. The bridge is a separate local setup step; it is not automatically launched by Claude. Its scripts are bundled starting with 1.6.0; the portable recovery command described below is available starting with 1.6.1. A cloud-hosted MCP deployment cannot attach to this local browser. True headless BigBasket tests were blocked; background payment submission remains unverified; clean Windows OTP login and browser/MCP restart persistence were verified on 2026-10-05 as described below. See [AUTHENTICATION.md](AUTHENTICATION.md) for the interactive setup.
 
 
 ### Windows Claude using an outdated checkout
@@ -277,7 +277,7 @@ must use the Windows bridge described in the README. `QC_CHROME_PATH` can select
 an installed Chrome executable instead of Playwright Chromium. The background
 helper does not require Codex or a Codex-managed Node installation.
 
-This recovery command is added after 1.6.0; it requires the next release or the
+This recovery command is available starting with **1.6.1**, or from the
 current source checkout (`node scripts/open-bigbasket-browser.mjs`). Do not
 assume an older cached `npx` package includes it. Fresh Windows background startup, MCP-compatible browser attachment and the
 logged-out BigBasket login button were verified with a temporary profile on
@@ -315,8 +315,8 @@ xvfb-run -a npx -y --package=quick-commerce-mcp quick-commerce-mcp-bigbasket-bro
 
 Keep the wrapper running while MCP attaches. This is headed Chromium on a
 virtual display; access and login still depend on BigBasket's site checks.
-The recovery executable requires the upcoming release or a source checkout;
-published 1.6.0 does not expose that executable.
+The recovery executable requires **1.6.1 or later**, or a source checkout;
+1.6.0 does not expose that executable.
 
 macOS uses the native Playwright Chromium executable and a dedicated visible
 browser, without the Windows PowerShell desktop helper. Playwright currently

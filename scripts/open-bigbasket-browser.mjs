@@ -40,7 +40,17 @@ try {
 try { rmSync(join(profile, 'DevToolsActivePort')); } catch { /* no old endpoint */ }
 const browser = mode === 'background'
   ? spawn(process.execPath, [fileURLToPath(new URL('./bigbasket-windows-worker.mjs', import.meta.url)), executable, profile, mode], { stdio: ['pipe', 'pipe', 'inherit'], windowsHide: true })
-  : spawn(executable, bigBasketBrowserArgs(profile, mode === 'headless').map(arg => arg === 'https://www.bigbasket.com' ? 'about:blank' : arg), { stdio: 'ignore', windowsHide: true });
+  : spawn(executable, bigBasketBrowserArgs(profile, mode === 'headless').map(arg => arg === 'https://www.bigbasket.com' ? 'about:blank' : arg), { stdio: ['ignore', 'ignore', 'pipe'], windowsHide: true });
+let startupDiagnostics = '';
+if (mode !== 'background') browser.stderr.on('data', chunk => { startupDiagnostics = (startupDiagnostics + chunk.toString()).slice(-8192); });
+function startupFailure() {
+  // Classify known startup errors only; never print raw browser output.
+  if (/missing x server|\$DISPLAY|failed to connect to.*display/i.test(startupDiagnostics)) return 'Linux Chromium requires a display. Use xvfb-run -a before the recovery command on a server, or launch it in your desktop session.';
+  if (/no usable sandbox|failed to move to new namespace|operation not permitted.*zygote/i.test(startupDiagnostics)) return 'Chromium could not initialize its sandbox on this Linux host. Configure supported user namespaces or use an installed Chrome executable via QC_CHROME_PATH; no sandbox bypass was applied.';
+  if (/error while loading shared libraries|cannot open shared object file/i.test(startupDiagnostics)) return 'Chromium system libraries are missing. Run npx playwright install --with-deps chromium.';
+  if (/ProcessSingleton|SingletonLock|profile appears to be in use/i.test(startupDiagnostics)) return 'The dedicated BigBasket profile is in use. Fully quit Claude/the MCP server and close its dedicated browser before starting recovery.';
+  return 'Chrome did not become ready. Fully quit Claude/the MCP server and close any browser using the dedicated BigBasket profile; also check the Chromium installation and display.';
+}
 let endpoint;
 let isolated = mode !== 'background';
 let launchError;
@@ -63,7 +73,7 @@ browser.once('exit', clearRegistry);
 try {
   for (let attempt = 0; attempt < 200 && !endpoint; attempt++) {
     if (launchError) throw launchError;
-    if (browser.exitCode !== null) throw new Error('Chrome exited. Fully quit Claude/the MCP server and close any browser using the dedicated BigBasket profile before starting recovery; the helper cannot take over a running profile.');
+    if (browser.exitCode !== null) throw new Error(startupFailure());
     try {
       const port = Number(readFileSync(join(profile, 'DevToolsActivePort'), 'utf8').split('\n')[0]);
       if (isolated && Number.isInteger(port) && port > 0 && port <= 65535) {
@@ -73,7 +83,7 @@ try {
     } catch { /* browser is still starting */ }
     if (!endpoint) await new Promise(resolve => setTimeout(resolve, 100));
   }
-  if (!endpoint) throw new Error('BigBasket browser did not expose a verified local endpoint.');
+  if (!endpoint) throw new Error(startupFailure());
   writeFileSync(registry, JSON.stringify({ endpoint, mode }), { mode: 0o600 });
   chmodSync(registry, 0o600);
   console.log(`BigBasket ${mode} browser ready. Keep this terminal open, restart Claude/MCP, then use check_login_status and login. Use --visible if a site check requires interaction. This dedicated profile is shared with MCP; your regular browser is not.`);

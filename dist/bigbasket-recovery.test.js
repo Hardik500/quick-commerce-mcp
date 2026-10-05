@@ -2,13 +2,25 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { spawn, execFile } from 'node:child_process';
 import { promisify } from 'node:util';
-import { mkdtemp, writeFile, readFile, rm, access } from 'node:fs/promises';
+import { mkdtemp, writeFile, readFile, rm, access, chmod } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { once } from 'node:events';
 import { chromium } from 'playwright';
 import { BigBasketPlatform } from './platforms/bigbasket.js';
+// Ubuntu hosted runners restrict namespaces for downloaded Chromium. Browser
+// fixtures elsewhere use Playwright's sandbox-disabled launch too. Apply that
+// only to this blank-page fixture; production recovery keeps its native sandbox.
+async function fixtureExecutable(home) {
+    if (process.platform !== 'linux')
+        return chromium.executablePath();
+    const executable = join(home, 'fixture-chromium');
+    const quoted = chromium.executablePath().replaceAll("'", "'\\''");
+    await writeFile(executable, `#!/bin/sh\nexec '${quoted}' --no-sandbox --disable-dev-shm-usage "$@"\n`);
+    await chmod(executable, 0o700);
+    return executable;
+}
 test('blocked BigBasket login gives dedicated-profile recovery without sending OTP', async () => {
     const browser = await chromium.launch({ headless: true });
     const context = await browser.newContext();
@@ -36,8 +48,9 @@ test('published recovery helper registers a private attachable endpoint and remo
     const home = await mkdtemp(join(tmpdir(), 'qc-recovery-'));
     const shim = join(home, 'home.mjs');
     await writeFile(shim, `import os from 'node:os'; import { syncBuiltinESMExports } from 'node:module'; os.homedir = () => ${JSON.stringify(home)}; syncBuiltinESMExports();`);
+    const executable = await fixtureExecutable(home);
     const child = spawn(process.execPath, ['--import', pathToFileURL(shim).href, 'scripts/open-bigbasket-browser.mjs'], {
-        env: { ...process.env, QC_BIGBASKET_BROWSER_MODE: 'headless', QC_CHROME_PATH: chromium.executablePath() },
+        env: { ...process.env, QC_BIGBASKET_BROWSER_MODE: 'headless', QC_CHROME_PATH: executable },
         stdio: ['ignore', 'pipe', 'pipe'],
     });
     let output = '';
@@ -60,7 +73,7 @@ test('published recovery helper registers a private attachable endpoint and remo
         finally {
             await browser.close();
         }
-        await assert.rejects(promisify(execFile)(process.execPath, ['--import', pathToFileURL(shim).href, 'scripts/open-bigbasket-browser.mjs'], { env: { ...process.env, QC_BIGBASKET_BROWSER_MODE: 'headless', QC_CHROME_PATH: chromium.executablePath() }, timeout: 5000 }), /already running/);
+        await assert.rejects(promisify(execFile)(process.execPath, ['--import', pathToFileURL(shim).href, 'scripts/open-bigbasket-browser.mjs'], { env: { ...process.env, QC_BIGBASKET_BROWSER_MODE: 'headless', QC_CHROME_PATH: executable }, timeout: 5000 }), /already running/);
         assert.equal(JSON.parse(await readFile(registry, 'utf8')).endpoint, record.endpoint);
         // Another browser can replace the registry before this helper shuts down.
         await writeFile(registry, JSON.stringify({ endpoint: 'http://127.0.0.1:1' }));
@@ -93,6 +106,49 @@ test('recovery refuses an already-owned profile without deleting its active debu
     }
     finally {
         await context.close();
+        await rm(home, { recursive: true, force: true });
+    }
+});
+test('Linux recovery without a display reports the virtual-display setup instead of a false profile collision', { skip: process.platform !== 'linux' }, async () => {
+    const home = await mkdtemp(join(tmpdir(), 'qc-no-display-'));
+    try {
+        const shim = join(home, 'home.mjs');
+        await writeFile(shim, `import os from 'node:os'; import { syncBuiltinESMExports } from 'node:module'; os.homedir = () => ${JSON.stringify(home)}; syncBuiltinESMExports();`);
+        const env = { ...process.env, QC_CHROME_PATH: await fixtureExecutable(home) };
+        delete env.DISPLAY;
+        delete env.WAYLAND_DISPLAY;
+        delete env.QC_BIGBASKET_BROWSER_MODE;
+        await assert.rejects(promisify(execFile)(process.execPath, ['--import', pathToFileURL(shim).href, 'scripts/open-bigbasket-browser.mjs'], { env, timeout: 10000 }), /requires a display.*xvfb-run/);
+    }
+    finally {
+        await rm(home, { recursive: true, force: true });
+    }
+});
+test('native Linux sandbox startup either becomes ready or reports the supported-host requirement', { skip: process.platform !== 'linux' }, async () => {
+    const home = await mkdtemp(join(tmpdir(), 'qc-native-sandbox-'));
+    const shim = join(home, 'home.mjs');
+    await writeFile(shim, `import os from 'node:os'; import { syncBuiltinESMExports } from 'node:module'; os.homedir = () => ${JSON.stringify(home)}; syncBuiltinESMExports();`);
+    const child = spawn(process.execPath, ['--import', pathToFileURL(shim).href, 'scripts/open-bigbasket-browser.mjs'], { env: { ...process.env, QC_BIGBASKET_BROWSER_MODE: 'headless', QC_CHROME_PATH: chromium.executablePath() }, stdio: ['ignore', 'pipe', 'pipe'] });
+    let output = '';
+    let errors = '';
+    child.stdout.on('data', chunk => { output += chunk; });
+    child.stderr.on('data', chunk => { errors += chunk; });
+    const closed = once(child, 'exit');
+    try {
+        for (let n = 0; n < 260 && !output.includes('browser ready') && child.exitCode === null; n++)
+            await new Promise(resolve => setTimeout(resolve, 100));
+        if (output.includes('browser ready'))
+            console.log('Native Linux sandbox: browser ready');
+        else {
+            assert.match(errors, /could not initialize its sandbox/, errors);
+            console.log('Native Linux sandbox: host must enable supported user namespaces or provide installed Chrome');
+        }
+    }
+    finally {
+        if (child.exitCode === null && child.signalCode === null) {
+            child.kill('SIGTERM');
+            await closed;
+        }
         await rm(home, { recursive: true, force: true });
     }
 });

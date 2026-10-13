@@ -22,7 +22,8 @@ before relying on a feature.
 
 ## Demo
 
-[![Watch the MCP demo](https://www.loom.com/v1/videos/174a9a22e5d54e15bf27eb2fb77f837f/thumbnail.gif)](https://www.loom.com/share/174a9a22e5d54e15bf27eb2fb77f837f)
+[Watch the MCP demo](https://youtu.be/XhLjgAiSnM8)
+
 
 
 ## 🚀 Quick Start

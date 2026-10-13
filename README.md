@@ -22,7 +22,7 @@ before relying on a feature.
 
 ## Demo
 
-[Watch the MCP demo](https://youtu.be/XhLjgAiSnM8)
+[![Watch the MCP demo](https://i9.ytimg.com/vi_webp/XhLjgAiSnM8/mq1.webp?sqp=CND1ttYG-oaymwEmCMACELQB8quKqQMa8AEB-AH-CYAC0AWKAgwIABABGEEgOCh_MA8=&rs=AOn4CLAIy1prl9pehVZbTp5LTk49MXxi_g)](https://youtu.be/XhLjgAiSnM8)
 
 
 

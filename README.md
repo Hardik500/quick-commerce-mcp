@@ -138,7 +138,9 @@ date range. For example:
 ```
 
 Dates are inclusive purchase dates in Asia/Kolkata, verified from the order detail
-including its year. Each order includes status, item name, pack size, quantity,
+including its year. Recent today/yesterday labels resolve against the response
+time in Asia/Kolkata. Active-order tracking links are supported too. Each order
+includes status, item name, pack size, quantity,
 charged `lineTotal`, derived `unitPrice`, item subtotal, fees and bill total.
 A pack such as `4 x 750 ml` remains one product pack; ordered quantity is separate.
 Discounted prices exclude crossed-out MRP. Item amounts must reconcile with the bill.

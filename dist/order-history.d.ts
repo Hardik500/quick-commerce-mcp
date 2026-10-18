@@ -45,5 +45,5 @@ export declare function historyPage(payload: unknown): {
     cards: HistoryCard[];
     hasMore: boolean;
 };
-export declare function historyDetail(payload: unknown, card: HistoryCard): HistoryOrder;
+export declare function historyDetail(payload: unknown, card: HistoryCard, referenceTime?: Date): HistoryOrder;
 //# sourceMappingURL=order-history.d.ts.map

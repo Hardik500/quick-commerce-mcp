@@ -56,6 +56,26 @@ test('historical charged lines exclude MRP, preserve pack multipliers and divide
   assert.equal(historyDetail(detail("14 Oct'26", true), card('1')).itemSubtotal, 100);
 });
 
+test('today and yesterday resolve using the response date in India across UTC midnight', () => {
+  const reference = new Date('2026-10-18T20:30:00Z'); // Oct 19 in India
+  for (const [label, expected] of [['today', '2026-10-19'], ['yesterday', '2026-10-18']]) {
+    const data = detail();
+    data.response.snippets[0].data.subtitle2.text = 'placed ' + label + ', 2:00 AM';
+    assert.equal(historyDetail(data, card('1'), reference).date, expected);
+  }
+});
+
+test('active-order tracking links resolve to the same read-only web detail route', () => {
+  const page = listing(['1']);
+  page.response.snippets[0].data.click_action.blinkit_deeplink.url = 'grofers://track-order?cart_id=99&order_id=1';
+  assert.deepEqual(historyPage(page).cards, [card('1')]);
+  for (const link of ['grofers://track-order/checkout?cart_id=99&order_id=1',
+    'grofers://user:secret@track-order?cart_id=99&order_id=1']) {
+    page.response.snippets[0].data.click_action.blinkit_deeplink.url = link;
+    assert.throws(() => historyPage(page));
+  }
+});
+
 test('missing rows, a lone struck-out MRP, unknown dates and unreconciled bills cannot become plausible prices', () => {
   const bad: any[] = [];
   const missing = detail(); missing.response.snippets.splice(2, 1); bad.push(missing);

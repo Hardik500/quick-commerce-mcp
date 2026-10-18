@@ -18,7 +18,8 @@ export async function readBlinkitOrder(page: Page, card: HistoryCard): Promise<H
     page.goto(card.url, { waitUntil: 'domcontentloaded', timeout: 30000 }),
   ]);
   if (!response.ok()) throw new Error('Blinkit order detail unavailable. Check login and retry.');
-  return historyDetail(await response.json(), card);
+  const responseDate = new Date(response.headers()['date'] ?? '');
+  return historyDetail(await response.json(), card, Number.isFinite(responseDate.getTime()) ? responseDate : new Date());
 }
 
 export async function latestBlinkitOrder(page: Page): Promise<string | null> {

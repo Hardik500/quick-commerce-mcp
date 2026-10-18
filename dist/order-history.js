@@ -24,7 +24,9 @@ export function historyPage(payload) {
             throw new Error('Blinkit order history layout changed: missing order link.');
         const url = new URL(link);
         const id = url.searchParams.get('order_id'), cart = url.searchParams.get('cart_id');
-        if (url.protocol !== 'grofers:' || url.hostname !== 'widgetized' || url.pathname !== '/order_details_v2' ||
+        const detailLink = url.hostname === 'widgetized' && url.pathname === '/order_details_v2';
+        const trackingLink = url.hostname === 'track-order' && (url.pathname === '' || url.pathname === '/');
+        if (url.protocol !== 'grofers:' || (!detailLink && !trackingLink) || url.username || url.password ||
             !id || !/^\d+$/.test(id) || !cart || !/^\d+$/.test(cart))
             throw new Error('Blinkit order history returned an unrecognized order link.');
         const status = s.data.items?.[0]?.tracking?.common_attributes?.order_status;
@@ -54,7 +56,16 @@ function amount(text) {
     const m = amounts[amounts.length - 1];
     return Number(m[2].replace(/,/g, '')) * (m[1] === '-' ? -1 : 1);
 }
-function placedDate(text) {
+function placedDate(text, referenceTime) {
+    // Recent details use "placed today/yesterday". Resolve only those explicit
+    // relative labels against the response time in the account's Indian timezone.
+    const relative = text.match(/^placed\s+(today|yesterday),/i);
+    if (relative) {
+        const localDate = new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Kolkata',
+            year: 'numeric', month: '2-digit', day: '2-digit' }).format(referenceTime);
+        return relative[1].toLowerCase() === 'today' ? localDate :
+            new Date(Date.parse(localDate) - 86400000).toISOString().slice(0, 10);
+    }
     const m = text.match(/\b(\d{1,2})\s+([A-Za-z]{3})['’\s]+(\d{4}|\d{2})\b/);
     const month = m ? ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec']
         .findIndex(x => x.toLowerCase() === m[2].toLowerCase()) + 1 : 0;
@@ -65,12 +76,12 @@ function placedDate(text) {
     historyQuery({ start_date: date, end_date: date });
     return date;
 }
-export function historyDetail(payload, card) {
+export function historyDetail(payload, card, referenceTime = new Date()) {
     const rows = snippets(payload);
     const placedAt = rows.find(s => s.data?.title?.text === 'Order placed')?.data?.subtitle2?.text;
     if (typeof placedAt !== 'string')
         throw new Error('Blinkit order detail did not finish loading: missing purchase date.');
-    const date = placedDate(placedAt);
+    const date = placedDate(placedAt, referenceTime);
     const itemRows = rows.filter(s => s.widget_type === 'z_v3_image_text_snippet_type_30');
     const items = itemRows.map(s => {
         const { title, subtitle1, subtitle3 } = s.data;

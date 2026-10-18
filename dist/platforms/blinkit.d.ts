@@ -3,6 +3,7 @@
  * URL: https://blinkit.com
  */
 import { BrowserContext, Locator } from 'playwright';
+import type { HistoryQuery, OrderHistory } from '../order-history.js';
 import { LoginStatus, QuickCommercePlatform, SearchResult, CartSummary, OrderPreview } from './base.js';
 import type { AddOutcome } from '../engine/add-strategy.js';
 /** Bill rows look like "Items total Saved ₹2 ₹195 ₹193" or "Handling charge ₹12": last ₹ amount is what's charged. */
@@ -60,6 +61,7 @@ export declare class BlinkitPlatform extends QuickCommercePlatform {
     protected openAddressPicker(): Promise<Locator>;
     private selectedAddress?;
     selectAddress(addressId: string, retried?: boolean): Promise<boolean>;
+    getOrderHistory(query: HistoryQuery): Promise<OrderHistory>;
     getLatestOrder(): Promise<string | null>;
     getOrderPreview(): Promise<OrderPreview | null>;
     private armedTotal?;

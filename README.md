@@ -66,9 +66,9 @@ Claude Desktop, Cursor, Windsurf (add to the client's MCP config, then restart i
 The verified shopping path for Blinkit and Zepto is `search_products` → `add_to_cart`
 → `get_cart_summary` → `remove_from_cart` / `clear_cart`. `compare_prices` and
 `resolve_items` have shared logic test coverage, but their full multi-platform flow
-was not reverified. Checkout via `get_order_preview` / `place_order`, and order
-tracking via `get_order_status`, are implemented but outside the current verified
-path; see [flow status](#supported-platforms-and-flow-status).
+was not reverified. Checkout via `get_order_preview` / `place_order` remains outside this verified
+shopping path. Blinkit history and latest-order lookup were live verified separately
+on 2026-10-18; see [flow status](#supported-platforms-and-flow-status).
 
 **Always pass `payment_method` explicitly to `place_order`.** Your saved default is a single value applied to every platform, and the same string means different things on different ones — `upi` is Blinkit-only, and Zepto needs `upi_qr` for a scannable QR. Relying on the default is the most common reason a payment method comes back unsupported.
 
@@ -119,8 +119,42 @@ update will behave identically.
 | Changing delivery address (`select_address`) | Not reverified | Not reverified | Not reverified |
 | Checkout preview (`get_order_preview`) | Not reverified | Not reverified | Previously failed; not reverified |
 | Order placement / payment (`place_order`, including COD) | Not reverified | Not reverified | Not reverified |
-| Order history/status (`get_order_status`) | Not reverified | Not reverified | Unsupported |
+| Order history/status (`get_order_status`) | Live verified 2026-10-18; structured historical detail | Not reverified | Unsupported |
+| Date-range item history (`get_order_history`) | Live verified 2026-10-18; pagination and failure cases test covered | Unsupported | Unsupported |
 | Live selector diagnosis/repair (`diagnose_flow`) | Not reverified | Not reverified | Not reverified |
+
+### Blinkit purchase history
+
+Use `get_order_history` to list purchased items and their historical prices for a
+date range. For example:
+
+```json
+{
+  "platform": "blinkit",
+  "start_date": "2026-10-01",
+  "end_date": "2026-10-31",
+  "max_orders": 100
+}
+```
+
+Dates are inclusive purchase dates in Asia/Kolkata, verified from the order detail
+including its year. Each order includes status, item name, pack size, quantity,
+charged `lineTotal`, derived `unitPrice`, item subtotal, fees and bill total.
+A pack such as `4 x 750 ml` remains one product pack; ordered quantity is separate.
+Discounted prices exclude crossed-out MRP. Item amounts must reconcile with the bill.
+
+The adapter navigates normal account pages and reads their browser responses. It
+paginates newest-first history until it crosses the start date or reaches the end.
+`complete: false` with `warnings` means orders could not be read/reconciled,
+pagination did not progress, or an inspection limit was reached. Do not describe
+such output as all orders. `max_orders` limits inspected details (including newer
+orders outside the range), defaults to 100 and accepts 1–200. Large scans may need
+a longer MCP client timeout. The tool never reorders, changes the cart or submits
+payment, and omits addresses and payment details.
+
+Verified on 2026-10-18 through a fresh local stdio MCP process against the saved
+Blinkit session. A running MCP process must reconnect after rebuilding to discover
+this new tool. Other platforms currently support only their existing status lookup.
 
 ### BigBasket development support (2026-10-04)
 

@@ -348,6 +348,9 @@ export class QuickCommercePlatform {
             throw new Error('Checkout unavailable. Resolve cart, login and address before preparing payment.');
         return { preview, ...await preparePaymentPanel(this.page, this.name, preview.paymentMethods, preferences, optionId) };
     }
+    async getOrderHistory(_query) {
+        throw new Error('Date-range order history is not supported on this platform.');
+    }
     /** Text of the most recent order (status, items, total), or null if unsupported/none. */
     async getLatestOrder() { return null; }
     async beginPaymentTracking(method, total) {

@@ -1,4 +1,6 @@
 /** Read-only purchase history. Only allowlisted order/item fields leave the adapter. */
+export declare const HISTORY_PLATFORMS: readonly ["blinkit", "zepto", "bigbasket"];
+export type HistoryPlatform = typeof HISTORY_PLATFORMS[number];
 export interface HistoryQuery {
     startDate: string;
     endDate: string;
@@ -8,9 +10,10 @@ export interface HistoryItem {
     name: string;
     packSize: string;
     quantity: number;
-    /** Historical charged line amount, including all units; never the crossed-out MRP. */
+    /** Historical line amount for all units; cancelled/refunded status remains separate. Never the crossed-out MRP. */
     lineTotal: number;
     unitPrice: number;
+    fulfilledQuantity?: number;
 }
 export interface HistoryOrder {
     id: string;
@@ -25,15 +28,22 @@ export interface HistoryOrder {
         label: string;
         amount: number;
     }[];
+    credits?: {
+        label: string;
+        amount: number;
+    }[];
+    amountPayable?: number;
+    refundTotal?: number;
 }
 export interface OrderHistory {
-    platform: 'blinkit';
+    platform: HistoryPlatform;
     startDate: string;
     endDate: string;
     currency: 'INR';
     orders: HistoryOrder[];
     complete: boolean;
     warnings: string[];
+    information?: string;
 }
 export interface HistoryCard {
     id: string;

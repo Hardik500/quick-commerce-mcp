@@ -180,8 +180,9 @@ test('fresh MCP advertises history and rejects unsupported platforms and invalid
     await client.connect(new StdioClientTransport({ command: process.execPath, args: ['dist/index.js'], stderr: 'ignore' }));
     const tool = (await client.listTools()).tools.find(t => t.name === 'get_order_history')!;
     assert.ok(tool);
+    assert.deepEqual((tool.inputSchema.properties!.platform as { enum: string[] }).enum, ['blinkit', 'zepto', 'bigbasket']);
     assert.deepEqual(tool.inputSchema.required, ['platform', 'start_date', 'end_date']);
-    for (const args of [{ platform: 'zepto', start_date: '2026-10-01', end_date: '2026-10-31' },
+    for (const args of [{ platform: 'swiggy-instamart', start_date: '2026-10-01', end_date: '2026-10-31' },
       { platform: 'blinkit', start_date: '2026-02-30', end_date: '2026-10-31' }]) {
       assert.equal((await client.callTool({ name: 'get_order_history', arguments: args })).isError, true);
     }

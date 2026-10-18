@@ -1,3 +1,4 @@
+import type { HistoryQuery, OrderHistory } from '../order-history.js';
 /**
  * Base platform interface for quick commerce automation
  * All platform implementations (Zepto, Swiggy, etc.) extend this
@@ -513,6 +514,10 @@ export abstract class QuickCommercePlatform {
     const preview = await this.getOrderPreview();
     if (!preview || !this.page) throw new Error('Checkout unavailable. Resolve cart, login and address before preparing payment.');
     return { preview, ...await preparePaymentPanel(this.page, this.name, preview.paymentMethods, preferences, optionId) };
+  }
+
+  async getOrderHistory(_query: HistoryQuery): Promise<OrderHistory> {
+    throw new Error('Date-range order history is not supported on this platform.');
   }
 
   /** Text of the most recent order (status, items, total), or null if unsupported/none. */

@@ -1,3 +1,4 @@
+import { zeptoOrderHistory } from '../zepto-history.js';
 import { QuickCommercePlatform, } from './base.js';
 import { sessionPath, ensureSessionDir, saveQrImage, openQrViewer, QR_OPTS } from '../session-helper.js';
 import { wantsQrViewer } from '../preferences.js';
@@ -648,6 +649,11 @@ export class ZeptoPlatform extends QuickCommercePlatform {
         return cards;
     }
     // ponytail: order list text only (status, total, time per order); no detail page parsing.
+    async getOrderHistory(query) {
+        if (!this.page)
+            throw new Error('Platform not initialized');
+        return zeptoOrderHistory(this.page, query);
+    }
     async getLatestOrder() {
         const page = this.page;
         if (!page)

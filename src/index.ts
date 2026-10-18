@@ -14,7 +14,7 @@ import {
 import { ZeptoPlatform } from './platforms/zepto.js';
 import { SwiggyInstamartPlatform } from './platforms/swiggy-instamart.js';
 import { BlinkitPlatform } from './platforms/blinkit.js';
-import { historyQuery } from './order-history.js';
+import { historyQuery, HISTORY_PLATFORMS } from './order-history.js';
 import { BigBasketPlatform } from './platforms/bigbasket.js';
 import { QuickCommercePlatform, Product, SearchResult } from './platforms/base.js';
 import { StealthBrowser } from './engine/stealth-browser.js';
@@ -298,14 +298,14 @@ const TOOLS: Tool[] = [
   },
   {
     name: 'get_order_history',
-    description: 'Read Blinkit purchase history for an inclusive date range in Asia/Kolkata. Returns every order with historical item names, pack sizes, quantities, charged line totals, derived unit prices, fees and bill totals. Paginates newest-first history; complete=false and warnings identify unreadable orders or scan limits. Read-only; never reorders or changes the cart.',
+    description: 'Read Blinkit, Zepto or BigBasket purchase history for an inclusive date range in Asia/Kolkata. Returns every order with historical item names, pack sizes, quantities, charged line totals, derived unit prices, fees and bill totals. Follows history pagination; complete=false and warnings identify unreadable orders or scan limits. Historical bills preserve cancelled/refunded status; do not sum those as spending. BigBasket separates full bill total from credits and amountPayable. Read-only; never reorders or changes the cart.',
     inputSchema: {
       type: 'object',
       properties: {
-        platform: { type: 'string', enum: ['blinkit'] },
+        platform: { type: 'string', enum: [...HISTORY_PLATFORMS] },
         start_date: { type: 'string', description: 'Inclusive purchase date, YYYY-MM-DD (Asia/Kolkata).' },
         end_date: { type: 'string', description: 'Inclusive purchase date, YYYY-MM-DD (Asia/Kolkata).' },
-        max_orders: { type: 'integer', minimum: 1, maximum: 200, default: 100, description: 'Maximum order details inspected, including newer orders outside the range. Narrow the range if incomplete.' },
+        max_orders: { type: 'integer', minimum: 1, maximum: 200, default: 100, description: 'Maximum orders inspected, including orders outside the range. Narrow the range if incomplete.' },
       },
       required: ['platform', 'start_date', 'end_date'],
       additionalProperties: false,
@@ -915,9 +915,9 @@ async function handle(name: string, args: any): Promise<any> {
       }
 
       case 'get_order_history': {
-        if (args?.platform !== 'blinkit') throw new Error('Order history date ranges are currently supported on Blinkit only.');
+        if (!HISTORY_PLATFORMS.includes(args?.platform)) throw new Error('Date-range history supports Blinkit, Zepto and BigBasket.');
         const query = historyQuery(args);
-        const platform = await getPlatform('blinkit') as BlinkitPlatform;
+        const platform = await getPlatform(args.platform);
         const history = await platform.getOrderHistory(query);
         return { content: [{ type: 'text', text: JSON.stringify(history, null, 2) }] };
       }

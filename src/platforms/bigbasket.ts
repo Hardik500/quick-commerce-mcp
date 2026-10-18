@@ -1,3 +1,5 @@
+import { bigBasketOrderHistory } from '../bigbasket-history.js';
+import type { HistoryQuery, OrderHistory } from '../order-history.js';
 import { BrowserContext, Locator } from 'playwright';
 import { QuickCommercePlatform, LoginStatus, SearchResult, Product, CartSummary, CartItem, Address, OrderPreview } from './base.js';
 import { ensureSessionDir, sessionPath } from '../session-helper.js';
@@ -354,6 +356,11 @@ export class BigBasketPlatform extends QuickCommercePlatform {
       return '';
     });
     return { cart, address: delivery || address, paymentMethods: methods };
+  }
+
+  async getOrderHistory(query: HistoryQuery): Promise<OrderHistory> {
+    if (!this.page) throw new Error('Platform not initialized');
+    return bigBasketOrderHistory(this.page, query);
   }
 
   async getLatestOrder(): Promise<string | null> {

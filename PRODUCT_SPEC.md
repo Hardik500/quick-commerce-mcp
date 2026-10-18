@@ -57,7 +57,7 @@ that is the authoritative list, since it is what the assistant actually reads.
 - `get_order_preview` — items, itemised bill, address and payment options; charges nothing
 - `place_order` — two-step, with a confirm token; supports `cod`, `upi_qr` (Zepto), `upi` (Blinkit) and `card`
 - `get_order_status` — most recent order on Blinkit or Zepto; read-only
-- `get_order_history` — Blinkit purchase dates, historical item quantities/prices and bills in an inclusive date range; reports incomplete scans explicitly
+- `get_order_history` — Blinkit, Zepto and BigBasket purchase dates, historical item quantities/prices and bills in an inclusive date range; reports incomplete scans explicitly
 
 **Repair**
 - `diagnose_flow` — inspect and repair a broken selector against the live page,

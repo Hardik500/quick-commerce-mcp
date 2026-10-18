@@ -120,12 +120,12 @@ update will behave identically.
 | Checkout preview (`get_order_preview`) | Not reverified | Not reverified | Previously failed; not reverified |
 | Order placement / payment (`place_order`, including COD) | Not reverified | Not reverified | Not reverified |
 | Order history/status (`get_order_status`) | Live verified 2026-10-18; structured historical detail | Not reverified | Unsupported |
-| Date-range item history (`get_order_history`) | Live verified 2026-10-18; pagination and failure cases test covered | Unsupported | Unsupported |
+| Date-range item history (`get_order_history`) | Live verified; pagination and failure cases test covered | Live verified in development; multiple history pages | Unsupported |
 | Live selector diagnosis/repair (`diagnose_flow`) | Not reverified | Not reverified | Not reverified |
 
-### Blinkit purchase history
+### Purchase history (Blinkit, Zepto and BigBasket)
 
-Use `get_order_history` to list purchased items and their historical prices for a
+Use `get_order_history` to list ordered items and their historical prices for a
 date range. For example:
 
 ```json
@@ -137,26 +137,47 @@ date range. For example:
 }
 ```
 
-Dates are inclusive purchase dates in Asia/Kolkata, verified from the order detail
-including its year. Recent today/yesterday labels resolve against the response
+Dates are inclusive purchase dates in Asia/Kolkata, verified from merchant order
+timestamps or dated order details, including the year. Recent today/yesterday labels resolve against the response
 time in Asia/Kolkata. Active-order tracking links are supported too. Each order
 includes status, item name, pack size, quantity,
 charged `lineTotal`, derived `unitPrice`, item subtotal, fees and bill total.
 A pack such as `4 x 750 ml` remains one product pack; ordered quantity is separate.
 Discounted prices exclude crossed-out MRP. Item amounts must reconcile with the bill.
 
-The adapter navigates normal account pages and reads their browser responses. It
-paginates newest-first history until it crosses the start date or reaches the end.
+All three adapters navigate normal account pages and read the browser responses.
+Zepto converts the merchant's paise amounts to rupees, combines its separate item
+and bill page responses, and follows Load More. BigBasket flattens grouped
+shipments and keeps active/recent/past pagination separate from any date-boundary
+assumption. Blinkit and Zepto can stop after crossing a verified newest-first
+purchase-date boundary; BigBasket exhausts its grouped history.
 `complete: false` with `warnings` means orders could not be read/reconciled,
 pagination did not progress, or an inspection limit was reached. Do not describe
-such output as all orders. `max_orders` limits inspected details (including newer
+such output as all orders. `max_orders` limits orders inspected (including
 orders outside the range), defaults to 100 and accepts 1–200. Large scans may need
 a longer MCP client timeout. The tool never reorders, changes the cart or submits
 payment, and omits addresses and payment details.
 
 Verified on 2026-10-18 through a fresh local stdio MCP process against the saved
 Blinkit session. A running MCP process must reconnect after rebuilding to discover
-this new tool. Other platforms currently support only their existing status lookup.
+changes to the tool schema. Set `platform` to `blinkit`, `zepto` or `bigbasket`.
+Swiggy Instamart date-range history is not implemented.
+
+Zepto and BigBasket development support is live verified through a fresh local
+stdio MCP process: Zepto followed multiple history pages; BigBasket read the
+available cancelled order through the existing Windows background-browser bridge.
+BigBasket pagination beyond its available single page is fixture-tested.
+Its native Linux browser failed in this environment; start the documented
+`scripts/bigbasket-windows-bridge.mjs` from WSL and keep it running to share the
+dedicated browser with MCP. No session or OTP is copied to an unrelated browser.
+
+Cancelled/refunded orders retain their status and historical bill values; those
+values are **not spending totals**. BigBasket returns `total` before wallet and
+NeuCoins credits, `credits` separately, and `amountPayable` after those credits.
+`refundTotal` is exposed when the merchant provides it. Historical item quantities
+count ordered packs; BigBasket also reports `fulfilledQuantity` when available.
+Item, bill, credit and refund parsing is fixture-tested, including waived charges,
+discounts, wrong order identity, missing rows, scan limits and incomplete pagination.
 
 ### BigBasket development support (2026-10-04)
 

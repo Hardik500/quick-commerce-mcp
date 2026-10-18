@@ -1,3 +1,4 @@
+import type { HistoryQuery, OrderHistory } from '../order-history.js';
 /**
  * Zepto platform implementation
  * URL: https://www.zeptonow.com
@@ -61,6 +62,7 @@ export declare class ZeptoPlatform extends QuickCommercePlatform {
     removeFromCart(productId: string): Promise<boolean>;
     clearCart(): Promise<boolean>;
     protected openAddressPicker(): Promise<Locator>;
+    getOrderHistory(query: HistoryQuery): Promise<OrderHistory>;
     getLatestOrder(): Promise<string | null>;
     getOrderPreview(): Promise<OrderPreview | null>;
     private armedTotal?;

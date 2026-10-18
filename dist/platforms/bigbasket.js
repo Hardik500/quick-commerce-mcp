@@ -1,3 +1,4 @@
+import { bigBasketOrderHistory } from '../bigbasket-history.js';
 import { QuickCommercePlatform } from './base.js';
 import { ensureSessionDir, sessionPath } from '../session-helper.js';
 import { chmodSync } from 'node:fs';
@@ -398,6 +399,11 @@ export class BigBasketPlatform extends QuickCommercePlatform {
             return '';
         });
         return { cart, address: delivery || address, paymentMethods: methods };
+    }
+    async getOrderHistory(query) {
+        if (!this.page)
+            throw new Error('Platform not initialized');
+        return bigBasketOrderHistory(this.page, query);
     }
     async getLatestOrder() {
         if (!this.page || !/\/member\/order-details\/track-order\/[\w-]+/.test(new URL(this.page.url()).pathname))

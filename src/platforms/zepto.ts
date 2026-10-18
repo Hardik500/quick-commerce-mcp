@@ -1,3 +1,5 @@
+import { zeptoOrderHistory } from '../zepto-history.js';
+import type { HistoryQuery, OrderHistory } from '../order-history.js';
 /**
  * Zepto platform implementation
  * URL: https://www.zeptonow.com
@@ -713,6 +715,11 @@ export class ZeptoPlatform extends QuickCommercePlatform {
   }
 
   // ponytail: order list text only (status, total, time per order); no detail page parsing.
+  async getOrderHistory(query: HistoryQuery): Promise<OrderHistory> {
+    if (!this.page) throw new Error('Platform not initialized');
+    return zeptoOrderHistory(this.page, query);
+  }
+
   async getLatestOrder(): Promise<string | null> {
     const page = this.page;
     if (!page) throw new Error('Platform not initialized');

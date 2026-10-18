@@ -1,3 +1,4 @@
+import type { HistoryQuery, OrderHistory } from '../order-history.js';
 import { BrowserContext, Locator } from 'playwright';
 import { QuickCommercePlatform, LoginStatus, SearchResult, CartSummary, Address, OrderPreview } from './base.js';
 import type { AddOutcome } from '../engine/add-strategy.js';
@@ -22,6 +23,7 @@ export declare class BigBasketPlatform extends QuickCommercePlatform {
     getAddresses(): Promise<Address[]>;
     selectAddress(id: string): Promise<boolean>;
     getOrderPreview(): Promise<OrderPreview | null>;
+    getOrderHistory(query: HistoryQuery): Promise<OrderHistory>;
     getLatestOrder(): Promise<string | null>;
     placeOrder(paymentMethod?: string, confirm?: boolean, provider?: string): Promise<import("../wallet.js").WalletOrderResult>;
 }

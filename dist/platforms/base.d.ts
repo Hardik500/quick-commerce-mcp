@@ -1,3 +1,4 @@
+import type { HistoryQuery, OrderHistory } from '../order-history.js';
 /**
  * Base platform interface for quick commerce automation
  * All platform implementations (Zepto, Swiggy, etc.) extend this
@@ -266,6 +267,7 @@ export declare abstract class QuickCommercePlatform {
         message: string;
         preview: OrderPreview;
     }>;
+    getOrderHistory(_query: HistoryQuery): Promise<OrderHistory>;
     /** Text of the most recent order (status, items, total), or null if unsupported/none. */
     getLatestOrder(): Promise<string | null>;
     beginPaymentTracking(method: string, total: number): Promise<void>;
